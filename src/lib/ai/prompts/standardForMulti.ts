@@ -1,0 +1,1 @@
+export const STANDARD_FOR_MULTI_BASELINE_INSTRUCTION = `Generate the lightweight Standard-for-Multi baseline only. This must populate every required Excel/client-output field, but keep it compact because specialist agents will replace change_to_contract_basis, commercial_impact and contractual_position.`;

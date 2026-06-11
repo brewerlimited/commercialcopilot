@@ -1,0 +1,3 @@
+export const RISKS_QUALIFICATIONS_PROMPT=`Return JSON only in this exact shape: { "section": "" } Return an empty section.`;
+export const RISKS_QUALIFICATIONS_NEC_PROMPT=RISKS_QUALIFICATIONS_PROMPT;
+export const RISKS_QUALIFICATIONS_JCT_PROMPT=RISKS_QUALIFICATIONS_PROMPT;
