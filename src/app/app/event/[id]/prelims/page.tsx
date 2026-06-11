@@ -481,8 +481,7 @@ export default function PrelimsPage() {
         setContractType((ev as any).contract_type ?? null);
         setDelayDays(clampNum((ev as any).delay_days, 0));
 
-        const { data: resLines } = await supabase
-          .from("event_resource_lines")
+        const { data: resLines } = await (supabase as any).from("event_resource_lines")
           .select("total")
           .eq("event_id", eventId);
 
@@ -490,8 +489,7 @@ export default function PrelimsPage() {
           (resLines as any[] | null)?.reduce((s, r) => s + clampNum(r.total, 0), 0) ?? 0;
         setDefinedCost(sum);
 
-        const { data: s } = await supabase
-          .from("event_valuation_settings")
+        const { data: s } = await (supabase as any).from("event_valuation_settings")
           .select("event_id,fee_percent,fee_basis,work_days_per_week")
           .eq("event_id", eventId)
           .maybeSingle();
@@ -506,8 +504,7 @@ export default function PrelimsPage() {
         };
         setSettings(mergedSettings);
 
-        const { data: p } = await supabase
-          .from("event_prelim_lines")
+        const { data: p } = await (supabase as any).from("event_prelim_lines")
           .select("id,event_id,name,qty,unit,rate,notes,prelim_type")
           .eq("event_id", eventId)
           .order("created_at", { ascending: true });
@@ -576,8 +573,7 @@ export default function PrelimsPage() {
       const user = await getRequiredUser(supabase);
       await getOwnedEventOrThrow(supabase, eventId, user.id);
 
-      const { error: evErr } = await supabase
-        .from("events")
+      const { error: evErr } = await (supabase as any).from("events")
         .update({ delay_days: Math.max(0, Math.round(delayDays || 0)) })
         .eq("id", eventId)
         .eq("user_id", user.id);
@@ -591,16 +587,14 @@ export default function PrelimsPage() {
         updated_at: new Date().toISOString(),
       };
 
-      const { error: sErr } = await supabase
-        .from("event_valuation_settings")
+      const { error: sErr } = await (supabase as any).from("event_valuation_settings")
         .upsert(toUpsertSettings, { onConflict: "event_id" });
       if (sErr) throw sErr;
 
       const validLines = lines.filter((l) => l.name.trim());
       const persistedIds = validLines.filter((l) => isUuid(l.id)).map((l) => l.id);
 
-      const { data: existingBefore } = await supabase
-        .from("event_prelim_lines")
+      const { data: existingBefore } = await (supabase as any).from("event_prelim_lines")
         .select("id")
         .eq("event_id", eventId);
 
@@ -608,8 +602,7 @@ export default function PrelimsPage() {
       const toDelete = existingBeforeIds.filter((id) => !persistedIds.includes(id));
 
       if (toDelete.length > 0) {
-        const { error: dErr } = await supabase
-          .from("event_prelim_lines")
+        const { error: dErr } = await (supabase as any).from("event_prelim_lines")
           .delete()
           .in("id", toDelete)
           .eq("event_id", eventId);
@@ -642,21 +635,18 @@ export default function PrelimsPage() {
         }));
 
       if (toInsert.length > 0) {
-        const { error: iErr } = await supabase
-          .from("event_prelim_lines")
+        const { error: iErr } = await (supabase as any).from("event_prelim_lines")
           .insert(toInsert as any);
         if (iErr) throw iErr;
       }
 
       if (toUpdate.length > 0) {
-        const { error: uErr } = await supabase
-          .from("event_prelim_lines")
+        const { error: uErr } = await (supabase as any).from("event_prelim_lines")
           .upsert(toUpdate as any, { onConflict: "id" });
         if (uErr) throw uErr;
       }
 
-      const { data: refreshedPrelims, error: refreshErr } = await supabase
-        .from("event_prelim_lines")
+      const { data: refreshedPrelims, error: refreshErr } = await (supabase as any).from("event_prelim_lines")
         .select("id,event_id,name,qty,unit,rate,notes,prelim_type")
         .eq("event_id", eventId)
         .order("created_at", { ascending: true });
@@ -728,7 +718,7 @@ export default function PrelimsPage() {
       try {
         const user = await getRequiredUser(supabase);
         await getOwnedEventOrThrow(supabase, eventId, user.id);
-        await supabase.from("event_prelim_lines").delete().eq("id", id).eq("event_id", eventId);
+        await (supabase as any).from("event_prelim_lines").delete().eq("id", id).eq("event_id", eventId);
         await recalculateEventFinancialSummary(supabase, eventId, user.id);
       } catch (e) {
         console.error(e);

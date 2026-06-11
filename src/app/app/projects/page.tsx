@@ -217,7 +217,7 @@ export default function ProjectsPage() {
         async function selectWithFallback<T>(table: "events" | "ewns", selects: string[]) {
           let lastError: unknown = null;
           for (const selectColumns of selects) {
-            const result = await supabase.from(table).select(selectColumns).eq("user_id", user.id);
+            const result = await (supabase as any).from(table).select(selectColumns).eq("user_id", user.id);
             if (!result.error) return (result.data ?? []) as T[];
 
             lastError = result.error;
@@ -229,7 +229,7 @@ export default function ProjectsPage() {
         }
 
         const [projectRes, eventRows, ewnRows] = await Promise.all([
-          supabase.from("projects").select("id,project_name,main_contractor,contract_type,status,job_number,updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }),
+          (supabase as any).from("projects").select("id,project_name,main_contractor,contract_type,status,job_number,updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }),
           selectWithFallback<EventRow>("events", eventSelects),
           selectWithFallback<EwnRow>("ewns", ewnSelects),
         ]);
@@ -240,8 +240,7 @@ export default function ProjectsPage() {
         const missingProjects = deriveMissingProjects(user.id, projectRows, eventRows, ewnRows);
 
         if (missingProjects.length > 0) {
-          const repairRes = await supabase
-            .from("projects")
+          const repairRes = await (supabase as any).from("projects")
             .upsert(missingProjects as never, { onConflict: "user_id,project_name,main_contractor" })
             .select("id,project_name,main_contractor,contract_type,status,job_number,updated_at");
           if (repairRes.error) throw repairRes.error;

@@ -233,12 +233,11 @@ export default function SettingsPage() {
       setIsAdmin(adminState);
 
       const [{ data: profile }, { data: creditRow }] = await Promise.all([
-        supabase
-          .from("profiles")
+        (supabase as any).from("profiles")
           .select("plan_type, subscription_status, stripe_customer_id, stripe_subscription_id, current_period_end, is_admin_unlimited, credits_remaining")
           .eq("id", user.id)
           .maybeSingle(),
-        supabase.from("user_credits").select("credits_remaining").eq("user_id", user.id).maybeSingle(),
+        (supabase as any).from("user_credits").select("credits_remaining").eq("user_id", user.id).maybeSingle(),
       ]);
       setBilling(getBillingSnapshot(profile, creditRow));
 

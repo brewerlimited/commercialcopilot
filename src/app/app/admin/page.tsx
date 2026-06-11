@@ -129,7 +129,7 @@ export default function AdminPage() {
         }
 
         const sessionRes = await supabase.auth.getSession();
-        const token = sessionRes.data.session?.access_token;
+        const token = (sessionRes.data as any)?.session?.access_token;
         const res = await fetch("/api/admin/overview", {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           cache: "no-store",
@@ -163,7 +163,7 @@ export default function AdminPage() {
       setSeedStatus(null);
       const supabase = supabaseBrowser();
       const sessionRes = await supabase.auth.getSession();
-      const token = sessionRes.data.session?.access_token;
+      const token = (sessionRes.data as any)?.session?.access_token;
       const res = await fetch("/api/admin/seed-demo", {
         method: "POST",
         headers: {

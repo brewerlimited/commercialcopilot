@@ -715,8 +715,7 @@ function AppHomeContent() {
         let lastError: unknown = null;
 
         for (const selectColumns of eventSelects) {
-          const result = await supabase
-            .from("events")
+          const result = await (supabase as any).from("events")
             .select(selectColumns)
             .eq("user_id", user.id)
             .order("created_at", { ascending: false });
@@ -894,14 +893,14 @@ function AppHomeContent() {
 
   const focusEvent = focusAction?.event ?? null;
 
-  const focusItems = useMemo(() => {
+  const focusItems: Array<{ label: string; done: boolean; kind: "done" | "warning" | "pending" }> = useMemo(() => {
     if (!focusProgress) return [] as Array<{ label: string; done: boolean; kind: "done" | "warning" | "pending" }>;
     return [
-      { label: "Basis of Change", done: focusProgress.basis, kind: focusProgress.basis ? "done" : "warning" as const },
-      { label: "Evidence", done: focusProgress.evidence, kind: focusProgress.evidence ? "done" : "warning" as const },
-      { label: "Resources", done: focusProgress.resources, kind: focusProgress.resources ? "done" : "warning" as const },
-      { label: "Prelims", done: focusProgress.prelims, kind: focusProgress.prelims ? "done" : "warning" as const },
-      { label: "Review", done: focusProgress.review, kind: focusProgress.review ? "done" : "pending" as const },
+      { label: "Basis of Change", done: focusProgress.basis, kind: (focusProgress.basis ? "done" : "warning") as "done" | "warning" },
+      { label: "Evidence", done: focusProgress.evidence, kind: (focusProgress.evidence ? "done" : "warning") as "done" | "warning" },
+      { label: "Resources", done: focusProgress.resources, kind: (focusProgress.resources ? "done" : "warning") as "done" | "warning" },
+      { label: "Prelims", done: focusProgress.prelims, kind: (focusProgress.prelims ? "done" : "warning") as "done" | "warning" },
+      { label: "Review", done: focusProgress.review, kind: (focusProgress.review ? "done" : "pending") as "done" | "pending" },
     ];
   }, [focusProgress]);
 
@@ -955,16 +954,15 @@ function AppHomeContent() {
 
       try {
         const [basisRes, filesRes, contractFilesRes, resourcesRes, prelimsRes, reviewRes] = await Promise.all([
-          supabase
-            .from("event_basis")
+          (supabase as any).from("event_basis")
             .select("happened_summary,cause_type,cause_summary,difference_from_plan,mechanism_tags,mitigation_summary")
             .eq("event_id", focusEvent.id)
             .maybeSingle(),
-          supabase.from("event_files").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
-          supabase.from("event_contract_files").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
-          supabase.from("event_resource_lines").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
-          supabase.from("event_prelim_lines").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
-          supabase.from("event_review_settings").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
+          (supabase as any).from("event_files").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
+          (supabase as any).from("event_contract_files").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
+          (supabase as any).from("event_resource_lines").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
+          (supabase as any).from("event_prelim_lines").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
+          (supabase as any).from("event_review_settings").select("id", { count: "exact", head: true }).eq("event_id", focusEvent.id),
         ]);
 
         const basis = basisRes.data as
@@ -1160,7 +1158,7 @@ function AppHomeContent() {
       setRenameSavingId(eventId);
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
-      const { error } = await supabase.from("events").update({ title: nextTitle }).eq("id", eventId).eq("user_id", user.id);
+      const { error } = await (supabase as any).from("events").update({ title: nextTitle }).eq("id", eventId).eq("user_id", user.id);
       if (error) throw error;
       setEvents((prev) => prev.map((e) => (e.id === eventId ? { ...e, title: nextTitle } : e)));
       cancelRename();
@@ -1182,7 +1180,7 @@ function AppHomeContent() {
 
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
-      const { error } = await supabase.from("events").update({ project_name: nextProject }).eq("id", event.id).eq("user_id", user.id);
+      const { error } = await (supabase as any).from("events").update({ project_name: nextProject }).eq("id", event.id).eq("user_id", user.id);
       if (error) throw error;
 
       setProjectMoveValues((prev) => {
@@ -1270,7 +1268,7 @@ function AppHomeContent() {
     try {
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
-      const update = await supabase.from("events").update(patch).eq("id", eventId).eq("user_id", user.id);
+      const update = await (supabase as any).from("events").update(patch).eq("id", eventId).eq("user_id", user.id);
 
       if (update.error) {
         const message = String(update.error.message || "");
@@ -1292,12 +1290,12 @@ function AppHomeContent() {
         if (/last_action_date/i.test(message)) delete fallbackNext.last_action_date;
         if (Object.keys(fallbackNext).length === Object.keys(patch).length) throw update.error;
         if (Object.keys(fallbackNext).length > 0) {
-          const fallback = await supabase.from("events").update(fallbackNext).eq("id", eventId).eq("user_id", user.id);
+          const fallback = await (supabase as any).from("events").update(fallbackNext).eq("id", eventId).eq("user_id", user.id);
           if (fallback.error) throw fallback.error;
         }
       }
 
-      await supabase.from("event_actions").insert({
+      await (supabase as any).from("event_actions").insert({
         event_id: eventId,
         user_id: user.id,
         action_type: patch.last_action_type || "tracking_updated",
@@ -1784,7 +1782,7 @@ function AppHomeContent() {
                         </Link>
                         <div style={{ textAlign: "right", display: "grid", gap: 6, justifyItems: "end" }}>
                           {hasValue ? (
-                            <div style={{ fontSize: 16, fontWeight: 650, color: c.text }}>{money(action.value)}</div>
+                            <div style={{ fontSize: 16, fontWeight: 650, color: c.text }}>{money(action.value ?? 0)}</div>
                           ) : (
                             <Link href={resourcesHref} style={{ fontSize: 16, fontWeight: 650, color: tone.tx, textDecoration: "none" }}>
                               Add value →

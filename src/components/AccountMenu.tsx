@@ -61,13 +61,11 @@ export default function AccountMenu() {
       const email = user.email ?? "account@company.com";
 
       const [{ data: creditRow }, { data: profile }] = await Promise.all([
-        supabase
-          .from("user_credits")
+        (supabase as any).from("user_credits")
           .select("credits_remaining")
           .eq("user_id", user.id)
           .maybeSingle(),
-        supabase
-          .from("profiles")
+        (supabase as any).from("profiles")
           .select("plan_type, subscription_status, is_admin_unlimited, stripe_customer_id, stripe_subscription_id, current_period_end, credits_remaining")
           .eq("id", user.id)
           .maybeSingle(),

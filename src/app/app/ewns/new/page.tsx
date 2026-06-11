@@ -255,7 +255,7 @@ export default function NewEwnPage() {
         required_action: requiredAction.trim(),
         evidence_summary: evidence.trim(),
         generated_output: output,
-        status: "open",
+        status: "open" as const,
         created_at: new Date().toISOString(),
       };
 

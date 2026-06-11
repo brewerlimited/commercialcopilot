@@ -407,10 +407,9 @@ export default function EvidencePage() {
     try {
       const user = await getRequiredUser(supabase);
       const ev = await getOwnedEventOrThrow(supabase, eventId, user.id, "id,title,user_id");
-      setEventTitle((ev as any).title ?? "");
+      setEventTitle((ev as { title?: string | null }).title ?? "");
 
-      const fl = await supabase
-        .from("event_files")
+      const fl = await (supabase as any).from("event_files")
         .select(
           "id,event_id,category,file_name,file_path,file_size,mime_type,description,evidence_date,relates_to,created_at"
         )
@@ -460,8 +459,8 @@ export default function EvidencePage() {
         const signed = await supabase.storage
           .from("event-files")
           .createSignedUrl(f.file_path, 60 * 30);
-        if (!signed.error && signed.data?.signedUrl) {
-          next[f.id] = signed.data.signedUrl;
+        if (!signed.error && (signed.data as any)?.signedUrl) {
+          next[f.id] = (signed.data as any)?.signedUrl;
         }
       }
 
@@ -548,7 +547,7 @@ export default function EvidencePage() {
 
         if (up.error) throw up.error;
 
-        const ins = await supabase.from("event_files").insert({
+        const ins = await (supabase as any).from("event_files").insert({
           event_id: eventId,
           category,
           file_name: file.name,
@@ -584,7 +583,7 @@ export default function EvidencePage() {
       const delStorage = await supabase.storage.from("event-files").remove([file.file_path]);
       if (delStorage.error) throw delStorage.error;
 
-      const delRow = await supabase.from("event_files").delete().eq("id", file.id).eq("event_id", eventId);
+      const delRow = await (supabase as any).from("event_files").delete().eq("id", file.id).eq("event_id", eventId);
       if (delRow.error) throw delRow.error;
 
       setFiles((prev) => prev.filter((x) => x.id !== file.id));
@@ -612,7 +611,7 @@ export default function EvidencePage() {
       setError(signed.error.message);
       return;
     }
-    window.open(signed.data.signedUrl, "_blank", "noopener,noreferrer");
+    window.open((signed.data as any)?.signedUrl, "_blank", "noopener,noreferrer");
   }
 
   async function saveMetadata(file: EventFile) {
@@ -621,8 +620,7 @@ export default function EvidencePage() {
     setError(null);
 
     try {
-      const upd = await supabase
-        .from("event_files")
+      const upd = await (supabase as any).from("event_files")
         .update({
           description: file.description,
           evidence_date: file.evidence_date || null,

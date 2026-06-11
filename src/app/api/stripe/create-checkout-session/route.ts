@@ -27,15 +27,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "NEXT_PUBLIC_APP_URL is not configured" }, { status: 500 });
     }
 
-    const admin = supabaseAdmin();
-    const { data: profile, error: profileError } = await admin
-      .from("profiles")
+    const admin = supabaseAdmin() as any;
+    const { data: rawProfile, error: profileError } = await (admin as any).from("profiles")
       .select("stripe_customer_id")
       .eq("id", user.id)
       .maybeSingle();
 
     if (profileError) throw profileError;
 
+    const profile = rawProfile as { stripe_customer_id?: string | null } | null;
     const stripe = getStripe();
     let customerId = profile?.stripe_customer_id || null;
 
@@ -46,8 +46,7 @@ export async function POST(req: NextRequest) {
       });
       customerId = customer.id;
 
-      const { error: updateProfileError } = await admin
-        .from("profiles")
+      const { error: updateProfileError } = await (admin as any).from("profiles")
         .upsert({ id: user.id, stripe_customer_id: customerId, updated_at: new Date().toISOString() }, { onConflict: "id" });
 
       if (updateProfileError) throw updateProfileError;

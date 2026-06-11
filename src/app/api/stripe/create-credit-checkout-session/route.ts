@@ -37,14 +37,20 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const quantity = normaliseQuantity(body?.quantity);
 
-    const admin = supabaseAdmin();
-    const { data: profile, error: profileError } = await admin
-      .from("profiles")
+    const admin = supabaseAdmin() as any;
+    const { data: rawProfile, error: profileError } = await (admin as any).from("profiles")
       .select("stripe_customer_id, subscription_status, plan_type, is_admin_unlimited")
       .eq("id", user.id)
       .maybeSingle();
 
     if (profileError) throw profileError;
+
+    const profile = rawProfile as {
+      stripe_customer_id?: string | null;
+      subscription_status?: string | null;
+      plan_type?: string | null;
+      is_admin_unlimited?: boolean | null;
+    } | null;
 
     const isPro = profile?.is_admin_unlimited || (profile?.plan_type === "pro_monthly" && isSubscriptionActive(profile?.subscription_status));
     if (!isPro) {
@@ -61,8 +67,7 @@ export async function POST(req: NextRequest) {
       });
       customerId = customer.id;
 
-      const { error: updateProfileError } = await admin
-        .from("profiles")
+      const { error: updateProfileError } = await (admin as any).from("profiles")
         .upsert({ id: user.id, stripe_customer_id: customerId, updated_at: new Date().toISOString() }, { onConflict: "id" });
 
       if (updateProfileError) throw updateProfileError;

@@ -34,9 +34,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const admin = supabaseAdmin();
-    const eventRes = await admin
-      .from("events")
+    const admin = supabaseAdmin() as any;
+    const eventRes = await (admin as any).from("events")
       .select("id,user_id,status")
       .eq("id", eventId)
       .eq("user_id", user.id)
@@ -47,8 +46,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
 
-    const packRes = await admin
-      .from("event_packs")
+    const packRes = await (admin as any).from("event_packs")
       .select("id")
       .eq("event_id", eventId)
       .eq("user_id", user.id)
@@ -66,8 +64,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const latestDraftRes = await admin
-      .from("event_ai_drafts")
+    const latestDraftRes = await (admin as any).from("event_ai_drafts")
       .select("draft_output,created_at")
       .eq("event_id", eventId)
       .eq("user_id", user.id)
@@ -94,7 +91,7 @@ export async function POST(req: NextRequest) {
     };
     const rebuttal = await generateAiRebuttalFromPayload(rebuttalPayload, contractorResponse);
 
-    const saveRes = await (admin.from("event_rebuttals") as any)
+    const saveRes = await ((admin as any).from("event_rebuttals") as any)
       .upsert(
         {
           event_id: eventId,

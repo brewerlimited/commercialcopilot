@@ -27,8 +27,7 @@ type BillingLogPayload = {
 };
 
 async function alreadyProcessedEvent(admin: any, eventId: string) {
-  const { data, error } = await admin
-    .from("billing_transactions")
+  const { data, error } = await (admin as any).from("billing_transactions")
     .select("id")
     .eq("stripe_event_id", eventId)
     .maybeSingle();
@@ -56,7 +55,7 @@ async function logBillingTransaction(admin: any, payload: BillingLogPayload) {
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await admin.from("billing_transactions").upsert(record, { onConflict: "stripe_event_id" });
+  const { error } = await (admin as any).from("billing_transactions").upsert(record, { onConflict: "stripe_event_id" });
 
   if (error) {
     console.warn("Stripe billing log failed:", error.message);
@@ -66,15 +65,13 @@ async function logBillingTransaction(admin: any, payload: BillingLogPayload) {
 async function syncCredits(admin: any, userId: string, creditsRemaining: number) {
   const now = new Date().toISOString();
 
-  const { error: profileError } = await admin
-    .from("profiles")
+  const { error: profileError } = await (admin as any).from("profiles")
     .update({ credits_remaining: creditsRemaining, updated_at: now })
     .eq("id", userId);
 
   if (profileError) throw profileError;
 
-  const { error: creditError } = await admin
-    .from("user_credits")
+  const { error: creditError } = await (admin as any).from("user_credits")
     .upsert({ user_id: userId, credits_remaining: creditsRemaining, updated_at: now }, { onConflict: "user_id" });
 
   if (creditError) throw creditError;
@@ -84,21 +81,22 @@ async function addCredits(admin: any, userId: string, creditsToAdd: number) {
   const safeCredits = Math.max(0, Math.floor(Number(creditsToAdd) || 0));
   if (safeCredits <= 0) return;
 
-  const { data: creditRow, error: creditLookupError } = await admin
-    .from("user_credits")
+  const { data: rawCreditRow, error: creditLookupError } = await (admin as any).from("user_credits")
     .select("credits_remaining")
     .eq("user_id", userId)
     .maybeSingle();
 
   if (creditLookupError) throw creditLookupError;
 
-  const { data: profile, error: profileLookupError } = await admin
-    .from("profiles")
+  const { data: rawProfile, error: profileLookupError } = await (admin as any).from("profiles")
     .select("credits_remaining")
     .eq("id", userId)
     .maybeSingle();
 
   if (profileLookupError) throw profileLookupError;
+
+  const creditRow = rawCreditRow as { credits_remaining?: number | null } | null;
+  const profile = rawProfile as { credits_remaining?: number | null } | null;
 
   const currentCredits =
     typeof creditRow?.credits_remaining === "number"
@@ -112,8 +110,7 @@ async function addCredits(admin: any, userId: string, creditsToAdd: number) {
 
 async function findProfileForInvoice(admin: any, stripeCustomerId: string | null, stripeSubscriptionId: string | null) {
   if (stripeCustomerId) {
-    const { data, error } = await admin
-      .from("profiles")
+    const { data, error } = await (admin as any).from("profiles")
       .select("id")
       .eq("stripe_customer_id", stripeCustomerId)
       .maybeSingle();
@@ -122,8 +119,7 @@ async function findProfileForInvoice(admin: any, stripeCustomerId: string | null
   }
 
   if (stripeSubscriptionId) {
-    const { data, error } = await admin
-      .from("profiles")
+    const { data, error } = await (admin as any).from("profiles")
       .select("id")
       .eq("stripe_subscription_id", stripeSubscriptionId)
       .maybeSingle();
@@ -181,7 +177,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid Stripe signature" }, { status: 400 });
   }
 
-  const admin = supabaseAdmin();
+  const admin = supabaseAdmin() as any;
 
   try {
     if (await alreadyProcessedEvent(admin, event.id)) {
@@ -190,7 +186,7 @@ export async function POST(req: NextRequest) {
 
     switch (event.type) {
       case "checkout.session.completed": {
-        const session = event.data.object as Stripe.Checkout.Session;
+        const session = (event.data as any)?.object as Stripe.Checkout.Session;
         const userId = session.metadata?.user_id || session.client_reference_id || null;
         const stripeCustomerId = typeof session.customer === "string" ? session.customer : session.customer?.id || null;
         const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id || null;
@@ -217,8 +213,7 @@ export async function POST(req: NextRequest) {
         }
 
         if (userId) {
-          const { error } = await admin
-            .from("profiles")
+          const { error } = await (admin as any).from("profiles")
             .upsert(
               {
                 id: userId,
@@ -249,14 +244,13 @@ export async function POST(req: NextRequest) {
 
       case "invoice.paid":
       case "invoice.payment_succeeded": {
-        const invoice = event.data.object as Stripe.Invoice;
+        const invoice = (event.data as any)?.object as Stripe.Invoice;
         const stripeCustomerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id || null;
         const stripeSubscriptionId = getSubscriptionIdFromInvoice(invoice);
         const profile = await findProfileForInvoice(admin, stripeCustomerId, stripeSubscriptionId);
 
         if (profile?.id) {
-          const { error } = await admin
-            .from("profiles")
+          const { error } = await (admin as any).from("profiles")
             .update({
               subscription_status: "active",
               plan_type: "pro_monthly",
@@ -290,15 +284,15 @@ export async function POST(req: NextRequest) {
 
       case "customer.subscription.updated":
       case "customer.subscription.deleted": {
-        const subscription = event.data.object as Stripe.Subscription;
+        const subscription = (event.data as any)?.object as Stripe.Subscription;
+        const subscriptionWithPeriod = subscription as Stripe.Subscription & { current_period_end?: number | null };
         const stripeCustomerId = typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id || null;
-        const currentPeriodEnd = subscription.current_period_end
-          ? new Date(subscription.current_period_end * 1000).toISOString()
+        const currentPeriodEnd = typeof subscriptionWithPeriod.current_period_end === "number"
+          ? new Date(subscriptionWithPeriod.current_period_end * 1000).toISOString()
           : null;
         const subscriptionStatus = event.type === "customer.subscription.deleted" ? "canceled" : subscription.status;
 
-        const { error } = await admin
-          .from("profiles")
+        const { error } = await (admin as any).from("profiles")
           .update({
             subscription_status: subscriptionStatus,
             stripe_customer_id: stripeCustomerId,
@@ -327,7 +321,7 @@ export async function POST(req: NextRequest) {
           stripe_event_id: event.id,
           status: "ignored",
           type: event.type,
-          raw_payload: event.data.object,
+          raw_payload: (event.data as any)?.object,
         });
         break;
       }

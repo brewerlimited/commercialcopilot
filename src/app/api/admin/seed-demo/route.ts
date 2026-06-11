@@ -168,13 +168,13 @@ function asSeedRows(label: string, rows: any): any[] {
 async function trySeedInsert(admin: ReturnType<typeof supabaseAdmin>, table: string, rows: any, label = table) {
   const arr = asSeedRows(`${label} insert`, rows);
   if (!arr.length) return { error: null, data: [] } as any;
-  return (admin.from(table) as any).insert(arr);
+  return ((admin as any).from(table) as any).insert(arr);
 }
 
 async function trySeedUpsert(admin: ReturnType<typeof supabaseAdmin>, table: string, rows: any, options?: { onConflict?: string }, label = table) {
   const arr = asSeedRows(`${label} upsert`, rows);
   if (!arr.length) return { error: null, data: [] } as any;
-  return (admin.from(table) as any).upsert(arr, options as any);
+  return ((admin as any).from(table) as any).upsert(arr, options as any);
 }
 
 function isMissingColumn(error: any, column: string) {
@@ -980,31 +980,31 @@ export async function POST(req: NextRequest) {
     const targetEmail = normalizeEmail(body?.targetEmail || body?.email || adminUser.email);
     if (!targetEmail) return NextResponse.json({ error: "Missing target email" }, { status: 400 });
 
-    const admin = supabaseAdmin();
+    const admin = supabaseAdmin() as any;
     const users = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
     if (users.error) throw users.error;
-    const target = (users.data.users || []).find((u) => normalizeEmail(u.email) === targetEmail);
+    const target = ((users.data as { users?: Array<{ id?: string; email?: string | null }> } | null)?.users ?? []).find((u: { id?: string; email?: string | null }) => normalizeEmail(u.email) === targetEmail);
     if (!target?.id) return NextResponse.json({ error: `No Supabase auth user found for ${targetEmail}` }, { status: 404 });
 
-    const existingEvents = await admin.from("events").select("id").eq("user_id", target.id).in("project_name", PROJECTS);
+    const existingEvents = await (admin as any).from("events").select("id").eq("user_id", target.id).in("project_name", PROJECTS);
     if (existingEvents.error) throw existingEvents.error;
     const oldIds = (existingEvents.data || []).map((x: any) => x.id).filter(Boolean);
 
     if (oldIds.length) {
-      await optionalQuery(admin.from("event_rebuttals").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_ai_drafts").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_packs").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_files").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_review_settings").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_valuation_settings").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_prelim_lines").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_resource_lines").delete().in("event_id", oldIds));
-      await optionalQuery(admin.from("event_basis").delete().in("event_id", oldIds));
-      const eventDelete = await admin.from("events").delete().in("id", oldIds).eq("user_id", target.id);
+      await optionalQuery((admin as any).from("event_rebuttals").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_ai_drafts").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_packs").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_files").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_review_settings").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_valuation_settings").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_prelim_lines").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_resource_lines").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_basis").delete().in("event_id", oldIds));
+      const eventDelete = await (admin as any).from("events").delete().in("id", oldIds).eq("user_id", target.id);
       if (eventDelete.error) throw eventDelete.error;
     }
 
-    const ewnDelete = await admin.from("ewns").delete().eq("user_id", target.id).in("project_name", PROJECTS);
+    const ewnDelete = await (admin as any).from("ewns").delete().eq("user_id", target.id).in("project_name", PROJECTS);
     if (ewnDelete.error) throw ewnDelete.error;
 
     const now = new Date().toISOString();
@@ -1145,7 +1145,7 @@ export async function POST(req: NextRequest) {
       const eventId = eventIds.get(`${e.project_name}:${e.event_number}`);
       if (!eventId) continue;
       const summary = financialSummary(e);
-      const packInsert = await (admin.from("event_packs") as any)
+      const packInsert = await ((admin as any).from("event_packs") as any)
         .insert([{
           event_id: eventId,
           user_id: target.id,
@@ -1250,8 +1250,8 @@ export async function POST(req: NextRequest) {
     // remove them for the freshly seeded demo events so Review starts at Generate Pack.
     const seededEventIds = Array.from(eventIds.values()).filter(Boolean);
     if (seededEventIds.length) {
-      await optionalQuery(admin.from("event_ai_drafts").delete().in("event_id", seededEventIds).eq("user_id", target.id));
-      await optionalQuery(admin.from("event_packs").delete().in("event_id", seededEventIds).eq("user_id", target.id));
+      await optionalQuery((admin as any).from("event_ai_drafts").delete().in("event_id", seededEventIds).eq("user_id", target.id));
+      await optionalQuery((admin as any).from("event_packs").delete().in("event_id", seededEventIds).eq("user_id", target.id));
     }
 
     await optionalQuery(trySeedUpsert(admin, "profiles", [{
@@ -1268,14 +1268,12 @@ export async function POST(req: NextRequest) {
       updated_at: now,
     }], { onConflict: "user_id" }, "user_credits"));
 
-    const resourceCount = await admin
-      .from("event_resource_lines")
+    const resourceCount = await (admin as any).from("event_resource_lines")
       .select("id", { count: "exact", head: true })
       .in("event_id", seededEventIds);
     if (resourceCount.error) throw resourceCount.error;
 
-    const prelimCount = await admin
-      .from("event_prelim_lines")
+    const prelimCount = await (admin as any).from("event_prelim_lines")
       .select("id", { count: "exact", head: true })
       .in("event_id", seededEventIds);
     if (prelimCount.error) throw prelimCount.error;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { buildEventStepPath, normalizeRouteParam } from "@/lib/routeParams";
 import { supabaseBrowser } from "@/lib/supabase/client";
@@ -437,7 +437,7 @@ function statusPill(status: CheckStatus) {
   };
 }
 
-export default function ReviewPage() {
+function ReviewPageContent() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -521,7 +521,7 @@ export default function ReviewPage() {
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationStage, setGenerationStage] = useState("Preparing generation…");
   const [generationEta, setGenerationEta] = useState("Estimating time…");
-  const progressTimerRef = useRef<ReturnType<typeof window.setInterval> | null>(null);
+  const progressTimerRef = useRef<number | null>(null);
   const [hasGeneratedPack, setHasGeneratedPack] = useState(false);
   const [forceGenerateMode, setForceGenerateMode] = useState(false);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("standard");
@@ -1014,8 +1014,7 @@ export default function ReviewPage() {
         setContractType(eventData.contract_type ?? null);
         setContractSource(eventData.contract_source ?? null);
 
-        const basisRes = await supabase
-          .from("event_basis")
+        const basisRes = await (supabase as any).from("event_basis")
           .select(
             "happened_summary,cause_type,cause_summary,difference_from_plan,mechanism_tags,time_impact_toggle,mitigation_summary"
           )
@@ -1024,20 +1023,19 @@ export default function ReviewPage() {
 
         if (basisRes.data) {
           setBasis({
-            happened_summary: basisRes.data.happened_summary ?? "",
-            cause_type: basisRes.data.cause_type ?? null,
-            cause_summary: basisRes.data.cause_summary ?? "",
-            difference_from_plan: basisRes.data.difference_from_plan ?? "",
-            mechanism_tags: Array.isArray(basisRes.data.mechanism_tags)
-              ? basisRes.data.mechanism_tags
+            happened_summary: (basisRes.data as any)?.happened_summary ?? "",
+            cause_type: (basisRes.data as any)?.cause_type ?? null,
+            cause_summary: (basisRes.data as any)?.cause_summary ?? "",
+            difference_from_plan: (basisRes.data as any)?.difference_from_plan ?? "",
+            mechanism_tags: Array.isArray((basisRes.data as any)?.mechanism_tags)
+              ? (basisRes.data as any)?.mechanism_tags
               : [],
-            time_impact_toggle: basisRes.data.time_impact_toggle ?? "unsure",
-            mitigation_summary: basisRes.data.mitigation_summary ?? "",
+            time_impact_toggle: (basisRes.data as any)?.time_impact_toggle ?? "unsure",
+            mitigation_summary: (basisRes.data as any)?.mitigation_summary ?? "",
           });
         }
 
-        const filesRes = await supabase
-          .from("event_files")
+        const filesRes = await (supabase as any).from("event_files")
           .select("category")
           .eq("event_id", eventId);
 
@@ -1048,8 +1046,7 @@ export default function ReviewPage() {
         setProgrammeCount(fileRows.filter((x) => x.category === "programme").length);
         setCostSupportCount(fileRows.filter((x) => x.category === "cost_support").length);
 
-        const resourceRes = await supabase
-          .from("event_resource_lines")
+        const resourceRes = await (supabase as any).from("event_resource_lines")
           .select("category,total")
           .eq("event_id", eventId);
 
@@ -1071,22 +1068,20 @@ export default function ReviewPage() {
         setMaterialTotal(material);
         setDefinedCost(labour + plant + material);
 
-        const valuationRes = await supabase
-          .from("event_valuation_settings")
+        const valuationRes = await (supabase as any).from("event_valuation_settings")
           .select("fee_percent,fee_basis,work_days_per_week")
           .eq("event_id", eventId)
           .maybeSingle();
 
         setValuation({
-          fee_percent: clampNum(valuationRes.data?.fee_percent, 12.5),
+          fee_percent: clampNum((valuationRes.data as any)?.fee_percent, 12.5),
           fee_basis:
-            (valuationRes.data?.fee_basis as "defined_cost" | "defined_cost_plus_prelims") ||
+            ((valuationRes.data as any)?.fee_basis as "defined_cost" | "defined_cost_plus_prelims") ||
             "defined_cost",
-          work_days_per_week: clampNum(valuationRes.data?.work_days_per_week, 5),
+          work_days_per_week: clampNum((valuationRes.data as any)?.work_days_per_week, 5),
         });
 
-        const prelimRes = await supabase
-          .from("event_prelim_lines")
+        const prelimRes = await (supabase as any).from("event_prelim_lines")
           .select("qty,unit,rate,prelim_type")
           .eq("event_id", eventId);
 
@@ -1096,8 +1091,7 @@ export default function ReviewPage() {
         setPrelimLines(prelimRows);
 
         if (eventData.contract_source === "upload_contract") {
-          const contractFilesRes = await supabase
-            .from("event_contract_files")
+          const contractFilesRes = await (supabase as any).from("event_contract_files")
             .select("id")
             .eq("event_id", eventId);
           setContractUploadCount((contractFilesRes.data ?? []).length);
@@ -1105,8 +1099,7 @@ export default function ReviewPage() {
           setContractUploadCount(0);
         }
 
-        const reviewRes = await supabase
-          .from("event_review_settings")
+        const reviewRes = await (supabase as any).from("event_review_settings")
           .select(
             "include_basis,include_entitlement,include_time_impact,include_evidence_register,include_cost_summary,include_prelims_fee,include_risk_notes,include_commercial_pushback,include_excel,include_pdf,qualifications_notes"
           )
@@ -1116,14 +1109,14 @@ export default function ReviewPage() {
         const mergedReview: ReviewSettings = {
           ...defaultReviewSettings,
           ...(reviewRes.data ?? {}),
-          qualifications_notes: reviewRes.data?.qualifications_notes ?? "",
+          qualifications_notes: (reviewRes.data as any)?.qualifications_notes ?? "",
         };
 
         setReviewSettings(mergedReview);
 
         const sessionRes = await supabase.auth.getSession();
         if (sessionRes.error) throw sessionRes.error;
-        const accessToken = sessionRes.data.session?.access_token;
+        const accessToken = (sessionRes.data as any)?.session?.access_token;
         if (!accessToken) throw new Error("AUTH_REQUIRED");
 
         const creditGateRes = await fetch("/api/credits", {
@@ -1145,8 +1138,7 @@ export default function ReviewPage() {
 
         if (existingPackAvailable && existingPackId) {
           try {
-            const latestDraftRes = await supabase
-              .from("event_ai_drafts")
+            const latestDraftRes = await (supabase as any).from("event_ai_drafts")
               .select("draft_output")
               .eq("event_id", eventId)
               .eq("pack_id", existingPackId)
@@ -1154,7 +1146,7 @@ export default function ReviewPage() {
               .limit(1)
               .maybeSingle();
 
-            if (!latestDraftRes.error && latestDraftRes.data?.draft_output) {
+            if (!latestDraftRes.error && (latestDraftRes.data as any)?.draft_output) {
               setGeneratedCommercialPushback(extractGeneratedCommercialPushback((latestDraftRes.data as any).draft_output));
             }
           } catch (pushbackLoadError) {
@@ -1163,8 +1155,7 @@ export default function ReviewPage() {
         }
 
         try {
-          const rebuttalRes = await supabase
-            .from("event_rebuttals")
+          const rebuttalRes = await (supabase as any).from("event_rebuttals")
             .select("contractor_response,rebuttal_subject,rebuttal_body,key_points,risk_note,updated_at")
             .eq("event_id", eventId)
             .maybeSingle();
@@ -1251,7 +1242,7 @@ export default function ReviewPage() {
 
       const { include_commercial_pushback, ...reviewPayload } = reviewSettings;
 
-      const { error } = await supabase.from("event_review_settings").upsert(
+      const { error } = await (supabase as any).from("event_review_settings").upsert(
         {
           event_id: eventId,
           ...reviewPayload,
@@ -1276,8 +1267,7 @@ export default function ReviewPage() {
   }
 
   async function getExistingPackId(supabase: ReturnType<typeof supabaseBrowser>, userId: string) {
-    const res = await supabase
-      .from("event_packs")
+    const res = await (supabase as any).from("event_packs")
       .select("id")
       .eq("event_id", eventId)
       .eq("user_id", userId)
@@ -1286,14 +1276,13 @@ export default function ReviewPage() {
       .maybeSingle();
 
     if (res.error) throw res.error;
-    const packId = res.data?.id ?? null;
+    const packId = (res.data as any)?.id ?? null;
     if (!packId) return null;
 
     // A pack is only genuinely downloadable if the AI draft/payload row exists.
     // Historic demo seed/test rows can create event_packs without usable output;
     // those must not flip the Review CTA to Download Pack.
-    const draftRes = await supabase
-      .from("event_ai_drafts")
+    const draftRes = await (supabase as any).from("event_ai_drafts")
       .select("id,draft_payload,draft_output")
       .eq("event_id", eventId)
       .eq("user_id", userId)
@@ -1336,31 +1325,25 @@ export default function ReviewPage() {
     const eventRes = { data: eventData } as any;
 
     const [basisRes, resourceRes, prelimRes, filesRes, valuationRes, companyProfileRes] = await Promise.all([
-      supabase
-        .from("event_basis")
+      (supabase as any).from("event_basis")
         .select("happened_summary,cause_type,cause_summary,difference_from_plan,mechanism_tags,time_impact_toggle,mitigation_summary")
         .eq("event_id", eventId)
         .maybeSingle(),
-      supabase
-        .from("event_resource_lines")
+      (supabase as any).from("event_resource_lines")
         .select("category,item_name,unit,hours,qty,rate,total,notes,start_date,end_date,linked_event")
         .eq("event_id", eventId)
         .order("start_date", { ascending: true }),
-      supabase
-        .from("event_prelim_lines")
+      (supabase as any).from("event_prelim_lines")
         .select("name,qty,unit,rate,notes,prelim_type")
         .eq("event_id", eventId),
-      supabase
-        .from("event_files")
+      (supabase as any).from("event_files")
         .select("id,category,file_name,description,relates_to,evidence_date,file_path")
         .eq("event_id", eventId),
-      supabase
-        .from("event_valuation_settings")
+      (supabase as any).from("event_valuation_settings")
         .select("fee_percent,fee_basis,work_days_per_week")
         .eq("event_id", eventId)
         .maybeSingle(),
-      supabase
-        .from("company_profiles")
+      (supabase as any).from("company_profiles")
         .select(COMPANY_PROFILE_SELECT)
         .eq("user_id", userId)
         .maybeSingle(),
@@ -1396,17 +1379,16 @@ export default function ReviewPage() {
         let downloadUrl: string | null = null;
 
         if (file.id && origin) {
-          const existing = await supabase
-            .from("event_file_share_links")
+          const existing = await (supabase as any).from("event_file_share_links")
             .select("token")
             .eq("event_file_id", file.id)
             .eq("is_active", true)
             .maybeSingle();
 
-          let token = existing.data?.token ?? null;
+          let token = (existing.data as any)?.token ?? null;
           if (!token) {
             token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-            const inserted = await supabase.from("event_file_share_links").insert({
+            const inserted = await (supabase as any).from("event_file_share_links").insert({
               event_id: eventId,
               event_file_id: file.id,
               token,
@@ -1419,13 +1401,12 @@ export default function ReviewPage() {
             }
 
             if (inserted.error) {
-              const retry = await supabase
-                .from("event_file_share_links")
+              const retry = await (supabase as any).from("event_file_share_links")
                 .select("token")
                 .eq("event_file_id", file.id)
                 .eq("is_active", true)
                 .maybeSingle();
-              token = retry.data?.token ?? null;
+              token = (retry.data as any)?.token ?? null;
             }
           }
 
@@ -1449,10 +1430,10 @@ export default function ReviewPage() {
       payload: {
         companyProfile: cleanCompanyProfile(companyProfileRes.data || null),
         meta: {
-          title: eventRes.data.title ?? title,
-          contractType: eventRes.data.contract_type ?? contractType,
-          contractSource: eventRes.data.contract_source ?? contractSource,
-          delayDays: clampNum(eventRes.data.delay_days, delayDays),
+          title: (eventRes.data as any)?.title ?? title,
+          contractType: (eventRes.data as any)?.contract_type ?? contractType,
+          contractSource: (eventRes.data as any)?.contract_source ?? contractSource,
+          delayDays: clampNum((eventRes.data as any)?.delay_days, delayDays),
           generatedAt: new Date().toISOString(),
           ceRef: displayEventReference(eventRes.data),
         },
@@ -1460,9 +1441,9 @@ export default function ReviewPage() {
         resources: (resourceRes.data ?? []) as any,
         prelims: (prelimRes.data ?? []) as any,
         valuation: {
-          fee_percent: clampNum(valuationRes.data?.fee_percent, valuation.fee_percent),
-          fee_basis: (valuationRes.data?.fee_basis as any) || valuation.fee_basis,
-          work_days_per_week: clampNum(valuationRes.data?.work_days_per_week, valuation.work_days_per_week),
+          fee_percent: clampNum((valuationRes.data as any)?.fee_percent, valuation.fee_percent),
+          fee_basis: ((valuationRes.data as any)?.fee_basis as any) || valuation.fee_basis,
+          work_days_per_week: clampNum((valuationRes.data as any)?.work_days_per_week, valuation.work_days_per_week),
         },
         review: reviewSettings,
         fileCounts: counts,
@@ -1500,7 +1481,7 @@ export default function ReviewPage() {
       const supabase = supabaseBrowser();
       const sessionRes = await supabase.auth.getSession();
       if (sessionRes.error) throw sessionRes.error;
-      const accessToken = sessionRes.data.session?.access_token;
+      const accessToken = (sessionRes.data as any)?.session?.access_token;
       if (!accessToken) throw new Error("AUTH_REQUIRED");
 
       const res = await fetch("/api/generate-rebuttal", {
@@ -1548,8 +1529,7 @@ export default function ReviewPage() {
       let latestDraftPayload: any = null;
 
       if (existingPackId) {
-        const latestDraftRes = await supabase
-          .from("event_ai_drafts")
+        const latestDraftRes = await (supabase as any).from("event_ai_drafts")
           .select("draft_payload,draft_output")
           .eq("event_id", eventId)
           .eq("pack_id", existingPackId)
@@ -1569,7 +1549,7 @@ export default function ReviewPage() {
       if (!latestDraftPayload || !latestAiDraft) {
         const sessionRes = await supabase.auth.getSession();
         if (sessionRes.error) throw sessionRes.error;
-        const accessToken = sessionRes.data.session?.access_token;
+        const accessToken = (sessionRes.data as any)?.session?.access_token;
         if (!accessToken) throw new Error("AUTH_REQUIRED");
 
         const existingRes = await fetch("/api/generate-pack", {
@@ -1624,7 +1604,7 @@ export default function ReviewPage() {
 
       const sessionRes = await supabase.auth.getSession();
       if (sessionRes.error) throw sessionRes.error;
-      const accessToken = sessionRes.data.session?.access_token;
+      const accessToken = (sessionRes.data as any)?.session?.access_token;
       if (!accessToken) throw new Error("AUTH_REQUIRED");
 
       const generateRes = await fetch("/api/generate-pack", {
@@ -2391,12 +2371,14 @@ export default function ReviewPage() {
               hint="These checks tell you what supports payment, what is weak, and what may undermine the CE if challenged."
             >
               <div style={{ display: "grid", gap: 14 }}>
-                {[
-                  ["Contract route", groupedChecks.contract],
-                  ["Causation and basis", groupedChecks.basis],
-                  ["Evidence support", groupedChecks.evidence],
-                  ["Valuation support", groupedChecks.cost],
-                ].map(([heading, items]) => (
+                {(
+                  [
+                    ["Contract route", groupedChecks.contract],
+                    ["Causation and basis", groupedChecks.basis],
+                    ["Evidence support", groupedChecks.evidence],
+                    ["Valuation support", groupedChecks.cost],
+                  ] as Array<[string, CheckItem[]]>
+                ).map(([heading, items]) => (
                   <div key={heading}>
                     <div
                       style={{
@@ -2781,3 +2763,11 @@ Check:
 
 Return improved sections before final JSON assembly.
 */
+
+export default function ReviewPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24 }}>Loading review…</div>}>
+      <ReviewPageContent />
+    </Suspense>
+  );
+}

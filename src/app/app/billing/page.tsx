@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
@@ -33,7 +33,7 @@ const c = {
   redText: "var(--red-text)",
 };
 
-export default function BillingPage() {
+function BillingPageContent() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("account@company.com");
   const [loading, setLoading] = useState(true);
@@ -61,12 +61,11 @@ export default function BillingPage() {
     setEmail(user.email ?? "account@company.com");
 
     const [{ data: profile }, { data: creditRow }] = await Promise.all([
-      supabase
-        .from("profiles")
+      (supabase as any).from("profiles")
         .select("plan_type, subscription_status, stripe_customer_id, stripe_subscription_id, current_period_end, is_admin_unlimited, credits_remaining")
         .eq("id", user.id)
         .maybeSingle(),
-      supabase.from("user_credits").select("credits_remaining").eq("user_id", user.id).maybeSingle(),
+      (supabase as any).from("user_credits").select("credits_remaining").eq("user_id", user.id).maybeSingle(),
     ]);
 
     setSnapshot(getBillingSnapshot(profile, creditRow));
@@ -329,5 +328,13 @@ export default function BillingPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+export default function BillingPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24 }}>Loading billing…</div>}>
+      <BillingPageContent />
+    </Suspense>
   );
 }

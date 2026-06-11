@@ -39,18 +39,16 @@ export async function recalculateEventFinancialSummary(
   eventId: string,
   userId?: string
 ): Promise<FinancialSummary> {
-  const eventQuery = supabase
-    .from("events")
+  const eventQuery = (supabase as any).from("events")
     .select("id,user_id,delay_days")
     .eq("id", eventId)
     .maybeSingle();
 
   const [eventRes, resourceRes, prelimRes, valuationRes] = await Promise.all([
     eventQuery,
-    supabase.from("event_resource_lines").select("total").eq("event_id", eventId),
-    supabase.from("event_prelim_lines").select("qty,unit,rate").eq("event_id", eventId),
-    supabase
-      .from("event_valuation_settings")
+    (supabase as any).from("event_resource_lines").select("total").eq("event_id", eventId),
+    (supabase as any).from("event_prelim_lines").select("qty,unit,rate").eq("event_id", eventId),
+    (supabase as any).from("event_valuation_settings")
       .select("fee_percent,fee_basis,work_days_per_week")
       .eq("event_id", eventId)
       .maybeSingle(),
@@ -101,7 +99,7 @@ export async function recalculateEventFinancialSummary(
     updated_at: new Date().toISOString(),
   };
 
-  let updateQuery = supabase.from("events").update({ event_financial_summary: summary }).eq("id", eventId);
+  let updateQuery = (supabase as any).from("events").update({ event_financial_summary: summary }).eq("id", eventId);
   if (userId) updateQuery = updateQuery.eq("user_id", userId);
   const updateRes = await updateQuery;
   if (updateRes.error) {

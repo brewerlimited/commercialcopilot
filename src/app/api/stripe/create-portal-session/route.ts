@@ -19,14 +19,14 @@ export async function POST(req: NextRequest) {
     if (!user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (!appUrl) return NextResponse.json({ error: "NEXT_PUBLIC_APP_URL is not configured" }, { status: 500 });
 
-    const admin = supabaseAdmin();
-    const { data: profile, error } = await admin
-      .from("profiles")
+    const admin = supabaseAdmin() as any;
+    const { data: rawProfile, error } = await (admin as any).from("profiles")
       .select("stripe_customer_id")
       .eq("id", user.id)
       .maybeSingle();
 
     if (error) throw error;
+    const profile = rawProfile as { stripe_customer_id?: string | null } | null;
     if (!profile?.stripe_customer_id) {
       return NextResponse.json({ error: "No Stripe customer found for this account" }, { status: 400 });
     }

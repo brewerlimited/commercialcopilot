@@ -16,6 +16,8 @@ type AppearanceContextValue = {
 
 const AppearanceContext = createContext<AppearanceContextValue | null>(null);
 
+const SYSTEM_FALLBACK_APPEARANCE_THEME: Exclude<AppearanceThemeId, "system"> = "contractor-dark";
+
 const INLINE_THEME_KEYS = [
   "--background",
   "--foreground",
@@ -157,7 +159,7 @@ const INLINE_THEME_OVERRIDES: Partial<Record<Exclude<AppearanceThemeId, "system"
 };
 
 function getStoredTheme(): AppearanceThemeId {
-  if (typeof window === "undefined") return DEFAULT_APPEARANCE_THEME;
+  if (typeof window === "undefined") return SYSTEM_FALLBACK_APPEARANCE_THEME;
   try {
     const stored = window.localStorage.getItem(APPEARANCE_STORAGE_KEY);
     return isAppearanceThemeId(stored) ? stored : DEFAULT_APPEARANCE_THEME;
@@ -167,13 +169,13 @@ function getStoredTheme(): AppearanceThemeId {
 }
 
 function getSystemTheme(): Exclude<AppearanceThemeId, "system"> {
-  if (typeof window === "undefined") return DEFAULT_APPEARANCE_THEME;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "contractor-dark" : DEFAULT_APPEARANCE_THEME;
+  if (typeof window === "undefined") return SYSTEM_FALLBACK_APPEARANCE_THEME;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "contractor-dark" : SYSTEM_FALLBACK_APPEARANCE_THEME;
 }
 
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<AppearanceThemeId>(DEFAULT_APPEARANCE_THEME);
-  const [systemTheme, setSystemTheme] = useState<Exclude<AppearanceThemeId, "system">>(DEFAULT_APPEARANCE_THEME);
+  const [systemTheme, setSystemTheme] = useState<Exclude<AppearanceThemeId, "system">>(SYSTEM_FALLBACK_APPEARANCE_THEME);
 
   useEffect(() => {
     setThemeState(getStoredTheme());

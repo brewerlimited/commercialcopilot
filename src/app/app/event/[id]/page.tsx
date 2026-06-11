@@ -722,8 +722,7 @@ export default function EventBasisPage() {
         setEventTiming(loadedTiming);
 
 
-      const basisRes = await supabase
-        .from("event_basis")
+      const basisRes = await (supabase as any).from("event_basis")
         .select("*")
         .eq("event_id", eventId)
         .maybeSingle();
@@ -740,8 +739,7 @@ export default function EventBasisPage() {
       // Safety net: if a previous UI pass failed to display the basis row, do not leave
       // existing CEs looking blank. Try to recover from the most recent generated payload.
       if (!hasMeaningfulBasis(merged)) {
-        const draftRes = await supabase
-          .from("event_ai_drafts")
+        const draftRes = await (supabase as any).from("event_ai_drafts")
           .select("draft_payload,draft_output,created_at")
           .eq("event_id", eventId)
           .order("created_at", { ascending: false })
@@ -886,8 +884,7 @@ export default function EventBasisPage() {
 
       // Never let a blank UI state overwrite a meaningful existing basis row.
       if (!hasMeaningfulBasis(basis)) {
-        const existing = await supabase
-          .from("event_basis")
+        const existing = await (supabase as any).from("event_basis")
           .select("*")
           .eq("event_id", eventId)
           .maybeSingle();
@@ -898,8 +895,7 @@ export default function EventBasisPage() {
         }
       }
 
-      const { error: basisError } = await supabase
-        .from("event_basis")
+      const { error: basisError } = await (supabase as any).from("event_basis")
         .upsert(basisPayload, { onConflict: "event_id" });
 
       if (basisError) throw basisError;
@@ -911,8 +907,7 @@ export default function EventBasisPage() {
         notification_deadline: timeRisk.deadline ? timeRisk.deadline.toISOString().slice(0, 10) : null,
       };
 
-      const eventUpdate = await supabase
-        .from("events")
+      const eventUpdate = await (supabase as any).from("events")
         .update(eventUpdatePayload)
         .eq("id", eventId)
         .eq("user_id", user.id);

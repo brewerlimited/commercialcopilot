@@ -71,7 +71,7 @@ export default function FeedbackWidget() {
         throw new Error("Please log in before submitting feedback.");
       }
 
-      const { error: insertError } = await supabase.from("feedback").insert({
+      const { error: insertError } = await (supabase as any).from("feedback").insert({
         user_id: user.id,
         user_email: user.email || null,
         page_url: typeof window !== "undefined" ? window.location.href : null,

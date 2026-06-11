@@ -41,10 +41,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid event id" }, { status: 400 });
     }
 
-    const admin = supabaseAdmin();
+    const admin = supabaseAdmin() as any;
 
-    const eventRes = await admin
-      .from("events")
+    const eventRes = await (admin as any).from("events")
       .select("id,user_id")
       .eq("id", eventId)
       .eq("user_id", user.id)
@@ -56,13 +55,11 @@ export async function POST(req: NextRequest) {
     }
 
     const [profileRes, creditRes] = await Promise.all([
-      admin
-        .from("profiles")
+      (admin as any).from("profiles")
         .select("id,subscription_status,is_admin_unlimited,credits_remaining")
         .eq("id", user.id)
         .maybeSingle(),
-      admin
-        .from("user_credits")
+      (admin as any).from("user_credits")
         .select("credits_remaining")
         .eq("user_id", user.id)
         .maybeSingle(),
@@ -103,8 +100,7 @@ export async function POST(req: NextRequest) {
     // a duplicate pack or deducting another credit. Only the internal/admin
     // force-generate mode is allowed to bypass this.
     if (!forceGenerateMode) {
-      const existingPackRes = await admin
-        .from("event_packs")
+      const existingPackRes = await (admin as any).from("event_packs")
         .select("id")
         .eq("event_id", eventId)
         .eq("user_id", user.id)
@@ -116,8 +112,7 @@ export async function POST(req: NextRequest) {
 
       const existingPack = existingPackRes.data as { id: string } | null;
       if (existingPack?.id) {
-        const latestDraftRes = await admin
-          .from("event_ai_drafts")
+        const latestDraftRes = await (admin as any).from("event_ai_drafts")
           .select("draft_payload,draft_output")
           .eq("event_id", eventId)
           .eq("user_id", user.id)
@@ -203,7 +198,7 @@ export async function POST(req: NextRequest) {
       multiStageDiagnostics: (aiDraft as any)?.multi_stage_diagnostics || null,
     });
 
-    const insertPackRes = await (admin.from("event_packs") as any)
+    const insertPackRes = await ((admin as any).from("event_packs") as any)
       .insert({
         event_id: eventId,
         user_id: user.id,
@@ -237,10 +232,10 @@ export async function POST(req: NextRequest) {
     const now = new Date().toISOString();
 
     const [profileUpdateRes, creditUpdateRes] = await Promise.all([
-      (admin.from("profiles") as any)
+      ((admin as any).from("profiles") as any)
         .update({ credits_remaining: nextCredits, updated_at: now })
         .eq("id", user.id),
-      (admin.from("user_credits") as any)
+      ((admin as any).from("user_credits") as any)
         .upsert(
           { user_id: user.id, credits_remaining: nextCredits, updated_at: now },
           { onConflict: "user_id" }

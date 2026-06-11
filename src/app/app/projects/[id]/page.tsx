@@ -255,8 +255,7 @@ export default function ProjectDetailPage() {
       try {
         const supabase = supabaseBrowser();
         const user = await getRequiredUser(supabase);
-        const projectRes = await supabase
-          .from("projects")
+        const projectRes = await (supabase as any).from("projects")
           .select("id,project_name,main_contractor,contract_type,status,job_number,start_date,completion_date,project_manager,quantity_surveyor,notes")
           .eq("user_id", user.id)
           .eq("id", params.id)
@@ -285,7 +284,7 @@ export default function ProjectDetailPage() {
         async function selectWithFallback<T>(table: "events" | "ewns", selects: string[]) {
           let lastError: unknown = null;
           for (const selectColumns of selects) {
-            const result = await supabase.from(table).select(selectColumns).eq("user_id", user.id);
+            const result = await (supabase as any).from(table).select(selectColumns).eq("user_id", user.id);
             if (!result.error) return (result.data ?? []) as T[];
 
             lastError = result.error;
@@ -397,7 +396,7 @@ export default function ProjectDetailPage() {
     try {
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
-      const update = await supabase.from("events").update(patch).eq("id", eventId).eq("user_id", user.id);
+      const update = await (supabase as any).from("events").update(patch).eq("id", eventId).eq("user_id", user.id);
 
       if (update.error) {
         const message = String(update.error.message || "");
@@ -418,12 +417,12 @@ export default function ProjectDetailPage() {
         if (/last_action_date/i.test(message)) delete fallbackNext.last_action_date;
         if (Object.keys(fallbackNext).length === Object.keys(patch).length) throw update.error;
         if (Object.keys(fallbackNext).length > 0) {
-          const fallback = await supabase.from("events").update(fallbackNext).eq("id", eventId).eq("user_id", user.id);
+          const fallback = await (supabase as any).from("events").update(fallbackNext).eq("id", eventId).eq("user_id", user.id);
           if (fallback.error) throw fallback.error;
         }
       }
 
-      await supabase.from("event_actions").insert({
+      await (supabase as any).from("event_actions").insert({
         event_id: eventId,
         user_id: user.id,
         action_type: patch.last_action_type || "tracking_updated",

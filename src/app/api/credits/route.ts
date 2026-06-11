@@ -16,16 +16,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const admin = supabaseAdmin();
+    const admin = supabaseAdmin() as any;
 
     const [creditRes, profileRes] = await Promise.all([
-      admin
-        .from("user_credits")
+      (admin as any).from("user_credits")
         .select("credits_remaining")
         .eq("user_id", user.id)
         .maybeSingle(),
-      admin
-        .from("profiles")
+      (admin as any).from("profiles")
         .select("is_admin_unlimited, credits_remaining, subscription_status")
         .eq("id", user.id)
         .maybeSingle(),

@@ -45,9 +45,8 @@ export async function POST(req: NextRequest) {
     if (!whatHappened) return NextResponse.json({ error: "What happened is required." }, { status: 400 });
     if (ewnId && !isUuid(ewnId)) return NextResponse.json({ error: "Invalid EWN id." }, { status: 400 });
 
-    const admin = supabaseAdmin();
-    const profileRes = await admin
-      .from("profiles")
+    const admin = supabaseAdmin() as any;
+    const profileRes = await (admin as any).from("profiles")
       .select("id,is_admin_unlimited,ewn_credits_remaining,ewn_credits_limit")
       .eq("id", user.id)
       .maybeSingle();
@@ -82,13 +81,12 @@ export async function POST(req: NextRequest) {
         status: "live",
         updated_at: new Date().toISOString(),
       };
-      const projectRes = await admin
-        .from("projects")
+      const projectRes = await (admin as any).from("projects")
         .upsert(projectPayload as never, { onConflict: linkedProjectId ? "id" : "user_id,project_name,main_contractor" })
         .select("id")
         .single();
       if (projectRes.error) throw projectRes.error;
-      linkedProjectId = projectRes.data.id;
+      linkedProjectId = (projectRes.data as { id: string } | null)?.id ?? null;
     }
 
     const output = await generateAiEwnFromInput({
@@ -124,14 +122,13 @@ export async function POST(req: NextRequest) {
       created_at: body.created_at || now,
     };
 
-    const upsertRes = await admin.from("ewns").upsert([row] as never, { onConflict: "id" }).select("id").single();
+    const upsertRes = await (admin as any).from("ewns").upsert([row] as never, { onConflict: "id" }).select("id").single();
     if (upsertRes.error) throw upsertRes.error;
 
     let nextCredits = currentCredits;
     if (!isAdminUnlimited) {
       nextCredits = Math.max(0, currentCredits - 1);
-      const updateRes = await admin
-        .from("profiles")
+      const updateRes = await (admin as any).from("profiles")
         .update({
           ewn_credits_remaining: nextCredits,
           ewn_credits_limit: clampNum(profile.ewn_credits_limit, BASELINE_EWN_CREDITS),
@@ -144,7 +141,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      id: upsertRes.data.id,
+      id: (upsertRes.data as { id: string } | null)?.id ?? row.id,
       generated_output: output,
     });
   } catch (error: unknown) {

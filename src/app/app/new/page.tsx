@@ -235,8 +235,7 @@ export default function NewEvent() {
         const user = data.session?.user;
         if (!user) return;
 
-        const res = await supabase
-          .from("projects")
+        const res = await (supabase as any).from("projects")
           .select("id,project_name,main_contractor,contract_type,updated_at")
           .eq("user_id", user.id)
           .order("updated_at", { ascending: false });
@@ -303,8 +302,7 @@ export default function NewEvent() {
         let row: Record<string, unknown> | null = null;
 
         if (user) {
-          const res = await supabase
-            .from("ewns")
+          const res = await (supabase as any).from("ewns")
             .select("id,title,project_id,project_name,main_contractor,contract_type,status,converted_event_id,event_date,location,what_happened,impact,required_action,evidence_summary,generated_output")
             .eq("id", ewnId)
             .eq("user_id", user.id)
@@ -389,8 +387,7 @@ export default function NewEvent() {
       const cleanMainContractor = mainContractor.trim();
       let linkedProjectId = projectId;
 
-      const projectRes = await supabase
-        .from("projects")
+      const projectRes = await (supabase as any).from("projects")
         .upsert(
           {
             id: linkedProjectId ?? undefined,
@@ -406,11 +403,10 @@ export default function NewEvent() {
         .select("id")
         .single();
       if (projectRes.error) throw projectRes.error;
-      linkedProjectId = projectRes.data.id as string;
+      linkedProjectId = (projectRes.data as any)?.id as string;
       setProjectId(linkedProjectId);
 
-      const existingRefs = await supabase
-        .from("events")
+      const existingRefs = await (supabase as any).from("events")
         .select("event_number,event_reference")
         .eq("user_id", user.id)
         .eq("project_name", cleanProjectName)
@@ -439,8 +435,7 @@ export default function NewEvent() {
         ...(eventDate ? { event_date: eventDate } : {}),
       };
 
-      let insertRes = await supabase
-        .from("events")
+      let insertRes = await (supabase as any).from("events")
         .insert([
           {
             ...basePayload,
@@ -455,8 +450,7 @@ export default function NewEvent() {
         const optionalColumnMissing = /notice_period_days/i.test(message);
         if (!optionalColumnMissing) throw insertRes.error;
 
-        insertRes = await supabase
-          .from("events")
+        insertRes = await (supabase as any).from("events")
           .insert([basePayload])
           .select("id")
           .single();
@@ -464,7 +458,7 @@ export default function NewEvent() {
 
       if (insertRes.error) throw insertRes.error;
 
-      const eventId = insertRes.data.id as string;
+      const eventId = (insertRes.data as any)?.id as string;
 
       if (contractSource === "upload_contract" && files.length > 0) {
         for (const file of files) {
@@ -480,7 +474,7 @@ export default function NewEvent() {
 
           if (upload.error) throw upload.error;
 
-          const fileInsert = await supabase.from("event_contract_files").insert({
+          const fileInsert = await (supabase as any).from("event_contract_files").insert({
             event_id: eventId,
             user_id: user.id,
             file_name: file.name,
@@ -515,7 +509,7 @@ export default function NewEvent() {
         const differenceFromPlan = buildEwnDifferenceText(conversionFacts);
 
         if (happenedSummary || ewnFacts.impact || ewnFacts.requiredAction || ewnFacts.evidence) {
-          await supabase.from("event_basis").upsert(
+          await (supabase as any).from("event_basis").upsert(
             {
               event_id: eventId,
               happened_summary: happenedSummary,
@@ -531,8 +525,7 @@ export default function NewEvent() {
           );
         }
 
-        const actionInsert = await supabase
-          .from("event_actions")
+        const actionInsert = await (supabase as any).from("event_actions")
           .insert({
             event_id: eventId,
             user_id: user.id,
@@ -549,8 +542,7 @@ export default function NewEvent() {
           console.warn("EWN conversion action log skipped", actionInsert.error.message);
         }
 
-        await supabase
-          .from("ewns")
+        await (supabase as any).from("ewns")
           .update({ status: "converted", converted_event_id: eventId, converted_at: new Date().toISOString() })
           .eq("id", fromEwnId)
           .eq("user_id", user.id);

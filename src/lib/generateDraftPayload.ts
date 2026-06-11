@@ -200,8 +200,7 @@ async function updateContractExtractionMetadata(
   if (!file?.id) return;
 
   try {
-    const update = await admin
-      .from("event_contract_files")
+    const update = await (admin as any).from("event_contract_files")
       .update({
         extracted_text: result.extracted_text || null,
         extraction_status: result.extraction_status,
@@ -293,9 +292,9 @@ async function extractContractFileText(
     let extractionError: string | null = null;
 
     if (isTextLikeFile(file)) {
-      extracted = await downloaded.data.text();
+      extracted = await (downloaded.data as any)?.text();
     } else {
-      const buffer = Buffer.from(await downloaded.data.arrayBuffer());
+      const buffer = Buffer.from(await (downloaded.data as any)?.arrayBuffer());
       if (isDocxFile(file)) {
         extracted = extractDocxTextFromBuffer(buffer);
         if (!extracted)
@@ -337,8 +336,7 @@ async function extractContractFileText(
 }
 
 async function fetchContractFiles(admin: SupabaseAdminClient, eventId: string) {
-  const withExtraction = await admin
-    .from("event_contract_files")
+  const withExtraction = await (admin as any).from("event_contract_files")
     .select(
       "id,file_name,file_path,file_size,mime_type,created_at,extracted_text,extraction_status,extraction_error,extracted_characters,extracted_at",
     )
@@ -354,8 +352,7 @@ async function fetchContractFiles(admin: SupabaseAdminClient, eventId: string) {
     );
   if (!missingExtractionColumns) return withExtraction;
 
-  return admin
-    .from("event_contract_files")
+  return (admin as any).from("event_contract_files")
     .select("id,file_name,file_path,file_size,mime_type,created_at")
     .eq("event_id", eventId)
     .order("created_at", { ascending: true });
@@ -371,8 +368,7 @@ async function fetchEvent(
   const selectFallback =
     "id,user_id,title,status,created_at,delay_days,contract_type,contract_source,project_name,main_contractor";
 
-  const primary = await admin
-    .from("events")
+  const primary = await (admin as any).from("events")
     .select(selectWithSummary)
     .eq("id", eventId)
     .eq("user_id", userId)
@@ -386,8 +382,7 @@ async function fetchEvent(
     /does not exist|schema cache|column/i.test(message);
   if (!missingSummary) return primary;
 
-  return admin
-    .from("events")
+  return (admin as any).from("events")
     .select(selectFallback)
     .eq("id", eventId)
     .eq("user_id", userId)
@@ -416,47 +411,40 @@ export async function buildGenerateDraftPayload(params: {
     reviewRes,
     companyProfileRes,
   ] = await Promise.all([
-    admin
-      .from("event_basis")
+    (admin as any).from("event_basis")
       .select(
         "happened_summary,cause_type,cause_summary,difference_from_plan,mechanism_tags,time_impact_toggle,mitigation_summary",
       )
       .eq("event_id", eventId)
       .maybeSingle(),
-    admin
-      .from("event_files")
+    (admin as any).from("event_files")
       .select(
         "id,category,file_name,file_path,file_size,mime_type,description,evidence_date,relates_to,created_at",
       )
       .eq("event_id", eventId)
       .order("created_at", { ascending: true }),
-    admin
-      .from("event_resource_lines")
+    (admin as any).from("event_resource_lines")
       .select(
         "id,category,item_name,unit,hours,qty,rate,total,notes,tags,start_date,end_date,linked_event,created_at",
       )
       .eq("event_id", eventId)
       .order("created_at", { ascending: true }),
-    admin
-      .from("event_valuation_settings")
+    (admin as any).from("event_valuation_settings")
       .select("fee_percent,fee_basis,work_days_per_week")
       .eq("event_id", eventId)
       .maybeSingle(),
-    admin
-      .from("event_prelim_lines")
+    (admin as any).from("event_prelim_lines")
       .select("id,name,qty,unit,rate,notes,prelim_type,created_at")
       .eq("event_id", eventId)
       .order("created_at", { ascending: true }),
     fetchContractFiles(admin, eventId),
-    admin
-      .from("event_review_settings")
+    (admin as any).from("event_review_settings")
       .select(
         "include_basis,include_entitlement,include_time_impact,include_evidence_register,include_cost_summary,include_prelims_fee,include_risk_notes,include_excel,include_pdf,qualifications_notes",
       )
       .eq("event_id", eventId)
       .maybeSingle(),
-    admin
-      .from("company_profiles")
+    (admin as any).from("company_profiles")
       .select(COMPANY_PROFILE_SELECT)
       .eq("user_id", userId)
       .maybeSingle(),
@@ -819,7 +807,7 @@ export async function tryStoreDraftPayload(params: {
   const now = new Date().toISOString();
 
   try {
-    const stored = await admin.from("event_ai_drafts").insert({
+    const stored = await (admin as any).from("event_ai_drafts").insert({
       event_id: eventId,
       user_id: userId,
       pack_id: packId || null,

@@ -74,13 +74,12 @@ export default function NewProjectPage() {
         notes: notes.trim() || null,
         updated_at: new Date().toISOString(),
       };
-      const res = await supabase
-        .from("projects")
+      const res = await (supabase as any).from("projects")
         .upsert(payload, { onConflict: "user_id,project_name,main_contractor" })
         .select("id")
         .single();
       if (res.error) throw res.error;
-      router.push(`/app/projects/${res.data.id}`);
+      router.push(`/app/projects/${(res.data as any)?.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save project";
       if (isAuthErrorMessage(message)) {

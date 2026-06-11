@@ -482,8 +482,7 @@ export default function ResourcesPage() {
       const eventProjectName = (ev as any).project_name ?? null;
       const eventMainContractor = (ev as any).main_contractor ?? null;
 
-      let rcQuery = supabase
-        .from("rate_cards")
+      let rcQuery = (supabase as any).from("rate_cards")
         .select("id,category,name,unit,rate,active,source_type,ceca_rate,adjustment_percent,final_rate,project_name,main_contractor")
         .eq("user_id", (ev as any).user_id);
 
@@ -503,8 +502,7 @@ export default function ResourcesPage() {
       });
       setRateCards(scopedRateCards);
 
-      const ln = await supabase
-        .from("event_resource_lines")
+      const ln = await (supabase as any).from("event_resource_lines")
         .select("id,event_id,category,item_name,unit,hours,qty,rate,total,notes,tags,start_date,end_date,linked_event,created_at")
         .eq("event_id", eventId)
         .order("created_at", { ascending: true });
@@ -653,8 +651,7 @@ export default function ResourcesPage() {
       };
 
       if (line._localOnly) {
-        const ins = await supabase
-          .from("event_resource_lines")
+        const ins = await (supabase as any).from("event_resource_lines")
           .insert(payload)
           .select("id")
           .single();
@@ -663,14 +660,14 @@ export default function ResourcesPage() {
         await recalculateEventFinancialSummary(supabase, eventId, user.id);
 
         setLines((prev) => {
-          const next = prev.map((x) => (x.id === line.id ? { ...line, id: ins.data.id, _localOnly: false } : x));
+          const next = prev.map((x) => (x.id === line.id ? { ...line, id: (ins.data as any)?.id, _localOnly: false } : x));
           lastSavedSnapshotRef.current = serialiseLines(next);
           setLastSavedAt(Date.now());
           setSaveState("saved");
           return next;
         });
       } else {
-        const up = await supabase.from("event_resource_lines").update(payload).eq("id", line.id).eq("event_id", eventId);
+        const up = await (supabase as any).from("event_resource_lines").update(payload).eq("id", line.id).eq("event_id", eventId);
         if (up.error) throw up.error;
 
         await recalculateEventFinancialSummary(supabase, eventId, user.id);
@@ -702,7 +699,7 @@ export default function ResourcesPage() {
       await getOwnedEventOrThrow(supabase, eventId, user.id);
 
       if (!line._localOnly) {
-        const del = await supabase.from("event_resource_lines").delete().eq("id", line.id).eq("event_id", eventId);
+        const del = await (supabase as any).from("event_resource_lines").delete().eq("id", line.id).eq("event_id", eventId);
         if (del.error) throw del.error;
       }
 

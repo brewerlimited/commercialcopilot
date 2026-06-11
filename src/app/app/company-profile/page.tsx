@@ -28,8 +28,7 @@ export default function CompanyProfilePage() {
       const supabase = supabaseBrowser();
       try {
         const user = await getRequiredUser(supabase);
-        const { data, error } = await supabase
-          .from("company_profiles")
+        const { data, error } = await (supabase as any).from("company_profiles")
           .select(COMPANY_PROFILE_SELECT)
           .eq("user_id", user.id)
           .maybeSingle();
@@ -72,7 +71,7 @@ export default function CompanyProfilePage() {
         company_registration_number: nextProfile.company_registration_number || "",
         updated_at: new Date().toISOString(),
       };
-      const { error } = await supabase.from("company_profiles").upsert(payload, { onConflict: "user_id" });
+      const { error } = await (supabase as any).from("company_profiles").upsert(payload, { onConflict: "user_id" });
       if (error) throw error;
       setCompanyProfile(cleanCompanyProfile(payload));
       setMessage("Company profile saved.");

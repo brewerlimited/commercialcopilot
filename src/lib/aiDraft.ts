@@ -1711,7 +1711,7 @@ function getQaHarmonisationPrompt(payload: any, context?: MultiStageContext | nu
 
 type MultiStageDiagnostic = {
   stage: string;
-  status: "started" | "success" | "failed" | "retrying" | "warning" | "waiting";
+  status: "started" | "success" | "failed" | "retrying" | "warning" | "waiting" | "skipped";
   attempt?: number;
   error?: string;
 };

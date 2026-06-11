@@ -295,24 +295,20 @@ export default function RateCardsPage() {
     try {
       const user = await getRequiredUser(supabase);
       const [rateRes, eventRes, settingsRes, cecaRes] = await Promise.all([
-        supabase
-          .from("rate_cards")
+        (supabase as any).from("rate_cards")
           .select("id,user_id,category,name,unit,rate,notes,active,project_name,main_contractor,source_type,ceca_item_id,ceca_rate,adjustment_percent,final_rate,created_at,updated_at")
           .eq("user_id", user.id)
           .order("category", { ascending: true })
           .order("name", { ascending: true }),
-        supabase
-          .from("events")
+        (supabase as any).from("events")
           .select("project_name,main_contractor,contract_type,updated_at")
           .eq("user_id", user.id)
           .not("project_name", "is", null)
           .order("updated_at", { ascending: false }),
-        supabase
-          .from("project_rate_settings")
+        (supabase as any).from("project_rate_settings")
           .select("id,project_name,main_contractor,ceca_adjustment_percent,use_ceca_for_plant")
           .eq("user_id", user.id),
-        supabase
-          .from("ceca_plant_rates_simple")
+        (supabase as any).from("ceca_plant_rates_simple")
           .select("id,section_name,item_name,capacity_text,hire_unit,ceca_rate,year")
           .order("section_name", { ascending: true })
           .order("item_name", { ascending: true }),
@@ -458,8 +454,7 @@ export default function RateCardsPage() {
         use_ceca_for_plant: projectPlantBasis === "ceca",
         updated_at: new Date().toISOString(),
       };
-      const { error } = await supabase
-        .from("project_rate_settings")
+      const { error } = await (supabase as any).from("project_rate_settings")
         .upsert(payload, { onConflict: "user_id,project_name,main_contractor" });
       if (error) throw error;
       setNotice("Project CECA settings saved.");
@@ -506,7 +501,7 @@ export default function RateCardsPage() {
         }));
 
       if (payload.length > 0) {
-        const { error } = await supabase.from("rate_cards").insert(payload);
+        const { error } = await (supabase as any).from("rate_cards").insert(payload);
         if (error) throw error;
       }
 
@@ -567,11 +562,10 @@ export default function RateCardsPage() {
 
       if (!editing) {
         payload.user_id = user.id;
-        const { error } = await supabase.from("rate_cards").insert(payload);
+        const { error } = await (supabase as any).from("rate_cards").insert(payload);
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("rate_cards")
+        const { error } = await (supabase as any).from("rate_cards")
           .update(payload)
           .eq("id", editing.id)
           .eq("user_id", user.id);
@@ -591,8 +585,7 @@ export default function RateCardsPage() {
   async function setActive(row: RateCard, next: boolean) {
     setErr(null);
     const supabase = supabaseBrowser();
-    const { error } = await supabase
-      .from("rate_cards")
+    const { error } = await (supabase as any).from("rate_cards")
       .update({ active: next, updated_at: new Date().toISOString() })
       .eq("id", row.id)
       .eq("user_id", row.user_id);
@@ -626,7 +619,7 @@ export default function RateCardsPage() {
         final_rate: row.final_rate ?? row.rate,
         updated_at: new Date().toISOString(),
       };
-      const { error } = await supabase.from("rate_cards").insert(payload);
+      const { error } = await (supabase as any).from("rate_cards").insert(payload);
       if (error) throw error;
       await load();
     } catch (e: any) {

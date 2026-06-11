@@ -29,12 +29,12 @@ export async function checkAdminWithClient(
   if (!normalized) return false;
   if (matchesConfiguredAdminEmail(normalized)) return true;
 
-  let res = await supabase.from("admin_users").select("email, is_active").eq("email", normalized).maybeSingle();
+  let res = await (supabase as any).from("admin_users").select("email, is_active").eq("email", normalized).maybeSingle();
 
   if (res.error) {
     const message = String(res.error.message || "");
     if (/column .*is_active.* does not exist/i.test(message)) {
-      res = await supabase.from("admin_users").select("email").eq("email", normalized).maybeSingle();
+      res = await (supabase as any).from("admin_users").select("email").eq("email", normalized).maybeSingle();
     }
   }
 
@@ -51,8 +51,8 @@ export async function checkAdminWithClient(
   }
 
   if (!res.data) return false;
-  if (typeof res.data.is_active === "boolean") return res.data.is_active;
-  return normalizeEmail(res.data.email) === normalized;
+  if (typeof (res.data as any)?.is_active === "boolean") return (res.data as any)?.is_active;
+  return normalizeEmail((res.data as any)?.email) === normalized;
 }
 
 export async function checkAdminWithServiceRole(
@@ -63,12 +63,12 @@ export async function checkAdminWithServiceRole(
   if (!normalized) return false;
   if (matchesConfiguredAdminEmail(normalized)) return true;
 
-  let res = await supabase.from("admin_users").select("email, is_active").eq("email", normalized).maybeSingle();
+  let res = await (supabase as any).from("admin_users").select("email, is_active").eq("email", normalized).maybeSingle();
 
   if (res.error) {
     const message = String(res.error.message || "");
     if (/column .*is_active.* does not exist/i.test(message)) {
-      res = await supabase.from("admin_users").select("email").eq("email", normalized).maybeSingle();
+      res = await (supabase as any).from("admin_users").select("email").eq("email", normalized).maybeSingle();
     }
   }
 
@@ -79,6 +79,6 @@ export async function checkAdminWithServiceRole(
   }
 
   if (!res.data) return false;
-  if (typeof res.data.is_active === "boolean") return res.data.is_active;
-  return normalizeEmail(res.data.email) === normalized;
+  if (typeof (res.data as any)?.is_active === "boolean") return (res.data as any)?.is_active;
+  return normalizeEmail((res.data as any)?.email) === normalized;
 }

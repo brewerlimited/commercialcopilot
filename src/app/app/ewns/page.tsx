@@ -94,8 +94,7 @@ function EwnRegisterInner() {
           if (active) setEwns(readLocalEwns());
           return;
         }
-        const res = await supabase
-          .from("ewns")
+        const res = await (supabase as any).from("ewns")
           .select("*")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
@@ -158,7 +157,7 @@ function EwnRegisterInner() {
       const user = data.session?.user;
 
       if (user) {
-        const { error } = await supabase.from("ewns").update({ status: nextStatus }).eq("id", ewn.id).eq("user_id", user.id);
+        const { error } = await (supabase as any).from("ewns").update({ status: nextStatus }).eq("id", ewn.id).eq("user_id", user.id);
         if (error) throw error;
       } else {
         const local = readLocalEwns().map((item) => (item.id === ewn.id ? { ...item, status: nextStatus } : item));
@@ -188,7 +187,7 @@ function EwnRegisterInner() {
       const user = data.session?.user;
 
       if (user) {
-        const { error } = await supabase.from("ewns").update({ project_name: nextProject }).eq("id", ewn.id).eq("user_id", user.id);
+        const { error } = await (supabase as any).from("ewns").update({ project_name: nextProject }).eq("id", ewn.id).eq("user_id", user.id);
         if (error) throw error;
       } else {
         const local = readLocalEwns().map((item) => (item.id === ewn.id ? { ...item, project_name: nextProject } : item));

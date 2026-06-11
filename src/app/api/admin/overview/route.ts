@@ -43,12 +43,12 @@ async function getAuthUser(req: NextRequest) {
 async function isAdminEmail(email?: string | null) {
   const normalized = normalizeEmail(email);
   if (!normalized) return false;
-  const admin = supabaseAdmin();
+  const admin = supabaseAdmin() as any;
   return checkAdminWithServiceRole(admin, normalized);
 }
 
 async function listAllUsers() {
-  const admin = supabaseAdmin();
+  const admin = supabaseAdmin() as any;
   const perPage = 200;
   let page = 1;
   const users: any[] = [];
@@ -75,14 +75,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const admin = supabaseAdmin();
+    const admin = supabaseAdmin() as any;
     const [users, eventsRes, packsRes, creditsRes, billingRes, feedbackRes] = await Promise.all([
       listAllUsers(),
-      admin.from("events").select("user_id,created_at,event_financial_summary"),
-      admin.from("event_packs").select("user_id,created_at,total_value"),
-      admin.from("user_credits").select("user_id,credits_remaining"),
-      admin.from("billing_transactions").select("user_id,amount,status,created_at").neq("status", "void"),
-      admin.from("feedback").select("id,user_id,user_email,page_url,feedback_type,message,status,created_at").order("created_at", { ascending: false }).limit(50),
+      (admin as any).from("events").select("user_id,created_at,event_financial_summary"),
+      (admin as any).from("event_packs").select("user_id,created_at,total_value"),
+      (admin as any).from("user_credits").select("user_id,credits_remaining"),
+      (admin as any).from("billing_transactions").select("user_id,amount,status,created_at").neq("status", "void"),
+      (admin as any).from("feedback").select("id,user_id,user_email,page_url,feedback_type,message,status,created_at").order("created_at", { ascending: false }).limit(50),
     ]);
 
     if (eventsRes.error && !/relation .*events.* does not exist/i.test(eventsRes.error.message)) throw eventsRes.error;

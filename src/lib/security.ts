@@ -14,8 +14,7 @@ export async function getOwnedEventOrThrow(
   userId: string,
   select = "id,title,user_id"
 ) {
-  const res = await supabase
-    .from("events")
+  const res = await (supabase as any).from("events")
     .select(select)
     .eq("id", eventId)
     .eq("user_id", userId)

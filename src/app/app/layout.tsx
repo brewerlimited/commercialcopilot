@@ -292,16 +292,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       try {
         const user = await getRequiredUser(supabase);
-        const { data: eventsData, error } = await supabase
-          .from("events")
+        const { data: eventsData, error } = await (supabase as any).from("events")
           .select("id,title,status,created_at")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
 
         if (error) throw error;
 
-        const { data: ewnsData, error: ewnsError } = await supabase
-          .from("ewns")
+        const { data: ewnsData, error: ewnsError } = await (supabase as any).from("ewns")
           .select("id,title,status,created_at")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });

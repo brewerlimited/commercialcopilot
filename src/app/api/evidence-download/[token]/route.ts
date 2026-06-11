@@ -31,8 +31,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: str
 
     const supabase = supabaseAdmin();
 
-    const shareRes = await supabase
-      .from("event_file_share_links")
+    const shareRes = await (supabase as any).from("event_file_share_links")
       .select("id,token,is_active,expires_at,issued_file_name,event_file_id")
       .eq("token", token)
       .maybeSingle();
@@ -48,8 +47,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ token: str
       return new Response("Evidence link has expired", { status: 410 });
     }
 
-    const fileRes = await supabase
-      .from("event_files")
+    const fileRes = await (supabase as any).from("event_files")
       .select("file_path,file_name,mime_type")
       .eq("id", share.event_file_id)
       .maybeSingle();
