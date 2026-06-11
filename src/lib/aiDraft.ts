@@ -1729,16 +1729,34 @@ function getMultiStageCooldownMs() {
   return 70000;
 }
 
+function getMultiStageAgentGapMs() {
+  const raw = process.env.MULTISTAGE_AGENT_GAP_MS || process.env.CC_MULTISTAGE_AGENT_GAP_MS;
+  const parsed = Number(raw);
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+
+  // Default to no artificial delay between successful agents.
+  // Generation should only pause when OpenAI actually returns a TPM/rate-limit error.
+  return 0;
+}
+
 function getRateLimitRetryDelayMs(error: any) {
   const message = String(error?.message || error || "");
+  const configuredGapMs = getMultiStageAgentGapMs();
+  const minimumTpmRetryMs = 15000;
   const match = message.match(/try again in\s+([0-9.]+)s/i);
+
   if (match?.[1]) {
     const seconds = Number(match[1]);
-    if (Number.isFinite(seconds)) return Math.ceil(seconds * 1000) + 2000;
+    if (Number.isFinite(seconds)) {
+      // Respect the API's exact retry hint, add a small buffer, and never retry TPM sooner than 15s.
+      return Math.max(minimumTpmRetryMs, configuredGapMs, Math.ceil(seconds * 1000) + 2000);
+    }
   }
-  // A short retry is not enough for TPM failures. The previous failed/requested
-  // tokens still sit inside the 60s rolling TPM window, so wait a full cooldown.
-  if (/rate limit|tokens per min|TPM|tokens per minute/i.test(message)) return getMultiStageCooldownMs();
+
+  if (/rate limit|tokens per min|TPM|tokens per minute/i.test(message)) {
+    return Math.max(minimumTpmRetryMs, configuredGapMs);
+  }
+
   return 0;
 }
 
@@ -1787,7 +1805,7 @@ async function runRequiredMultiStageStep<T>(
   diagnostics: MultiStageDiagnostic[],
   stage: string,
   fn: () => Promise<T>,
-  maxAttempts = 2
+  maxAttempts = 4
 ): Promise<T> {
   let lastError: any = null;
 
@@ -1822,6 +1840,33 @@ async function runRequiredMultiStageStep<T>(
   }
 
   throw new Error(`${stage} failed after ${maxAttempts} attempt(s): ${lastError?.message || lastError || "Unknown error"}`);
+}
+
+async function runMultiStageAgentGap(
+  diagnostics: MultiStageDiagnostic[],
+  stage: string,
+  reason = "Spacing AI section agents to avoid OpenAI TPM bursts."
+) {
+  const gapMs = getMultiStageAgentGapMs();
+  if (gapMs <= 0) return;
+  pushMultiStageDiagnostic(diagnostics, {
+    stage,
+    status: "waiting",
+    error: `${reason} Waiting ${Math.round(gapMs / 1000)}s before the next agent.`,
+  });
+  await sleep(gapMs);
+}
+
+async function runMultiStageSectionAgent<T>(
+  diagnostics: MultiStageDiagnostic[],
+  stage: string,
+  fn: () => Promise<T>,
+  options?: { waitBefore?: boolean }
+): Promise<T> {
+  if (options?.waitBefore) {
+    await runMultiStageAgentGap(diagnostics, stage);
+  }
+  return await runRequiredMultiStageStep(diagnostics, stage, fn, 4);
 }
 
 const MULTI_STAGE_QA_SCHEMA = {
@@ -2075,17 +2120,23 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
     2
   );
 
+  await runMultiStageAgentGap(
+    multiStageDiagnostics,
+    "Standard-for-Multi baseline generation",
+    "Spacing context extraction and baseline generation to avoid OpenAI TPM bursts."
+  );
+
   const baseDraft = await runRequiredMultiStageStep(
     multiStageDiagnostics,
     "Standard-for-Multi baseline generation",
     () => generateBaseDraft(multiStageContext, true),
-    2
+    4
   );
 
   pushMultiStageDiagnostic(multiStageDiagnostics, {
-    stage: "Parallel section generation",
+    stage: "Sequential section generation",
     status: "started",
-    error: "Standard-for-Multi baseline has completed. Launching individual supporting and specialist section agents together. Risks and qualifications is skipped by Pass 2.1.",
+    error: "Standard-for-Multi baseline has completed. Running individual supporting and specialist section agents sequentially with 15s TPM spacing. Risks and qualifications is skipped by Pass 2.1.",
   });
 
 
@@ -2095,118 +2146,114 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
     error: "Skipped by Pass 2.1: risks and qualifications has been removed from multi-stage generation to reduce token usage and avoid low-value TPM failures.",
   });
 
-  const [
-    background,
-    effectOnDefinedCost,
-    effectOnProgramme,
-    assumptions,
-    conclusion,
-    changeToContractBasis,
-    commercialImpact,
-    contractualPosition,
-  ] = await Promise.all([
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Background Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "background",
-        payload,
-        context: multiStageContext,
-      }),
-      2
-    ),
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Effect on Defined Cost / Valuation Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "effect_on_defined_cost",
-        payload,
-        context: multiStageContext,
-      }),
-      2
-    ),
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Programme Impact Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "effect_on_programme",
-        payload,
-        context: multiStageContext
-      }),
-      2
-    ),
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Assumptions Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "assumptions",
-        payload,
-        context: multiStageContext,
-      }),
-      2
-    ),
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Conclusion Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "conclusion",
-        payload,
-        context: multiStageContext,
-      }),
-      2
-    ),
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Change to Contract Basis Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "change_to_contract_basis",
-        payload,
-        context: multiStageContext,
-      }),
-      2
-    ),
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Commercial Impact Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "commercial_impact",
-        payload,
-        context: multiStageContext,
-      }),
-      2
-    ),
-    runRequiredMultiStageStep(
-      multiStageDiagnostics,
-      "Contractual Position Agent",
-      () => generateMultiStageSection({
-        apiKey,
-        model,
-        sectionKey: "contractual_position",
-        payload,
-        context: multiStageContext,
-      }),
-      2
-    ),
-  ]);
+  const background = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Background Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "background",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
+
+  const effectOnDefinedCost = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Effect on Defined Cost / Valuation Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "effect_on_defined_cost",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
+
+  const effectOnProgramme = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Programme Impact Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "effect_on_programme",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
+
+  const assumptions = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Assumptions Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "assumptions",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
+
+  const conclusion = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Conclusion Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "conclusion",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
+
+  const changeToContractBasis = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Change to Contract Basis Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "change_to_contract_basis",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
+
+  const commercialImpact = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Commercial Impact Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "commercial_impact",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
+
+  const contractualPosition = await runMultiStageSectionAgent(
+    multiStageDiagnostics,
+    "Contractual Position Agent",
+    () => generateMultiStageSection({
+      apiKey,
+      model,
+      sectionKey: "contractual_position",
+      payload,
+      context: multiStageContext,
+    }),
+    { waitBefore: true }
+  );
 
   pushMultiStageDiagnostic(multiStageDiagnostics, {
-    stage: "Parallel section generation",
+    stage: "Sequential section generation",
     status: "success",
-    error: "All required supporting and specialist section agents completed. Risks and qualifications was intentionally skipped.",
+    error: "All required supporting and specialist section agents completed. Agents only pause when OpenAI returns a TPM retry instruction. Risks and qualifications was intentionally skipped.",
   });
 
   const supportingSections: Pick<
@@ -2229,7 +2276,7 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
   let finalSpecialistSections = specialistSections;
 
   try {
-    finalSpecialistSections = await runRequiredMultiStageStep(
+    finalSpecialistSections = await runMultiStageSectionAgent(
       multiStageDiagnostics,
       "QA Harmonisation",
       () => harmoniseMultiStageSections({
@@ -2239,7 +2286,7 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
         context: multiStageContext,
         sections: specialistSections,
       }),
-      2
+      { waitBefore: true }
     );
   } catch (qaError: any) {
     // QA is valuable, but the individual section agents are the critical product output.
@@ -2270,7 +2317,7 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
     };
 
   try {
-    finalCommercialIntelligence = await runRequiredMultiStageStep(
+    finalCommercialIntelligence = await runMultiStageSectionAgent(
       multiStageDiagnostics,
       "Commercial Pushback Agent",
       () => generateCommercialPushbackIntelligence({
@@ -2280,7 +2327,7 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
         context: multiStageContext,
         sections: mergedClientOutput,
       }),
-      2
+      { waitBefore: true }
     );
   } catch (pushbackError: any) {
     pushMultiStageDiagnostic(multiStageDiagnostics, {
