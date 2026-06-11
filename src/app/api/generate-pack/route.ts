@@ -6,7 +6,7 @@ import { buildGenerateDraftPayload, tryStoreDraftPayload } from "@/lib/generateD
 import { generateAiDraftFromPayload } from "@/lib/aiDraft";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 800;
+export const maxDuration = 300;
 
 function clampNum(value: any, fallback = 0) {
   const n = typeof value === "number" ? value : parseFloat(String(value));
