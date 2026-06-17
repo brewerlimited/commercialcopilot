@@ -326,7 +326,9 @@ export default function ResourcesPage() {
 
 
   const activityBuckets = useMemo(() => {
-    const derivedFromLines = lines.reduce<ActivityRecord[]>((acc, line) => {
+    const activeCategoryLines = activeTab === "prelims" ? [] : lines.filter((line) => line.category === activeTab);
+
+    const derivedFromLines = activeCategoryLines.reduce<ActivityRecord[]>((acc, line) => {
       const title = normaliseActivityValue(line.linked_event, "General activity") || "General activity";
       const date = line.start_date ?? null;
       const notes = normaliseActivityValue(line.notes, "General notes") || "General notes";
@@ -351,8 +353,7 @@ export default function ResourcesPage() {
     return mergedBase
       .map<ActivityBucket>((activity) => {
         const key = getActivityKey(activity);
-        const bucketLines = lines
-          .filter((line) => (activeTab === "prelims" ? false : line.category === activeTab))
+        const bucketLines = activeCategoryLines
           .filter((line) => getActivityKey({
             title: normaliseActivityValue(line.linked_event, "General activity") || "General activity",
             date: line.start_date ?? null,

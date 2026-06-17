@@ -368,6 +368,110 @@ function nextTrackingState(next: TrackingUpdate) {
   return patch;
 }
 
+function paymentStatusForDatabase(status?: string | null) {
+  // Older Supabase schemas still allow "applied" but reject the newer
+  // "submitted_for_payment" value. The UI normalises "applied" back to
+  // "Submitted for payment", so writes stay compatible without changing display.
+  return status === "submitted_for_payment" ? "applied" : status;
+}
+
+function trackingPatchForDatabase(patch: Partial<EventRow>) {
+  return {
+    ...patch,
+    ...(Object.prototype.hasOwnProperty.call(patch, "payment_status")
+      ? { payment_status: paymentStatusForDatabase(patch.payment_status) }
+      : {}),
+  };
+}
+
+const OPTIONAL_RECOVERY_TRACKING_COLUMNS = [
+  "submitted_amount",
+  "assessed_amount",
+  "paid_amount",
+  "disallowed_amount",
+  "balance_outstanding",
+  "last_chased_date",
+  "next_chase_date",
+  "client_response",
+  "dispute_reason",
+  "agreed_payment_date",
+] as const;
+
+const ACTION_TRACKING_COLUMNS = ["last_action_type", "last_action_date"] as const;
+
+function removeColumns<T extends Record<string, unknown>>(row: T, columns: readonly string[]) {
+  const next = { ...row };
+  for (const column of columns) delete next[column];
+  return next;
+}
+
+function compactTrackingPatch(row: Partial<EventRow>) {
+  return Object.fromEntries(
+    Object.entries(row).filter(([, value]) => value !== undefined)
+  ) as Partial<EventRow>;
+}
+
+function isOptionalSchemaError(error: any) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("could not find") ||
+    message.includes("column") ||
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    error?.code === "PGRST204"
+  );
+}
+
+async function optionalDeleteQuery(query: any, label: string) {
+  const result = await query;
+  if (result?.error && !isOptionalSchemaError(result.error)) {
+    console.warn(`Could not delete linked ${label}`, result.error);
+  }
+  return result;
+}
+
+function hasCoreTrackingChange(next: TrackingUpdate) {
+  return (
+    Object.prototype.hasOwnProperty.call(next, "status") ||
+    Object.prototype.hasOwnProperty.call(next, "payment_status") ||
+    Object.prototype.hasOwnProperty.call(next, "expected_payment_date")
+  );
+}
+
+async function updateEventTrackingWithFallback(supabase: any, eventId: string, userId: string, patch: Partial<EventRow>) {
+  const databasePatch = compactTrackingPatch(trackingPatchForDatabase(patch));
+  const attempts = [
+    databasePatch,
+    removeColumns(databasePatch, OPTIONAL_RECOVERY_TRACKING_COLUMNS),
+    removeColumns(databasePatch, [...OPTIONAL_RECOVERY_TRACKING_COLUMNS, ...ACTION_TRACKING_COLUMNS]),
+    Object.prototype.hasOwnProperty.call(databasePatch, "status")
+      ? { status: databasePatch.status }
+      : {},
+  ].filter((attempt, index, arr) => {
+    const keys = Object.keys(attempt);
+    if (keys.length === 0) return false;
+    const signature = JSON.stringify(keys.sort().map((key) => [key, (attempt as any)[key]]));
+    return arr.findIndex((candidate) => {
+      const candidateKeys = Object.keys(candidate);
+      const candidateSignature = JSON.stringify(candidateKeys.sort().map((key) => [key, (candidate as any)[key]]));
+      return candidateSignature === signature;
+    }) === index;
+  });
+
+  let lastError: any = null;
+  for (const attempt of attempts) {
+    const result = await (supabase as any).from("events").update(attempt).eq("id", eventId).eq("user_id", userId);
+    if (!result.error) {
+      return { saved: true, partial: Object.keys(attempt).length !== Object.keys(databasePatch).length, error: null };
+    }
+    lastError = result.error;
+  }
+
+  return { saved: false, partial: false, error: lastError };
+}
+
 function actionTone(tone: DashboardAction["tone"]) {
   if (tone === "red") return { bg: c.redBg, bd: c.redBd, tx: c.redTx };
   if (tone === "amber") return { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx };
@@ -686,6 +790,7 @@ function AppHomeContent() {
   const [renameSavingId, setRenameSavingId] = useState<string | null>(null);
   const [projectMoveValues, setProjectMoveValues] = useState<Record<string, string>>({});
   const [projectMoveSavingId, setProjectMoveSavingId] = useState<string | null>(null);
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
   const [focusProgress, setFocusProgress] = useState<FocusProgress | null>(null);
   const [focusLoading, setFocusLoading] = useState(false);
 
@@ -1196,6 +1301,80 @@ function AppHomeContent() {
     }
   }
 
+  async function unlinkConvertedEwns(supabase: any, eventId: string, userId: string) {
+    const fullUpdate = await supabase
+      .from("ewns")
+      .update({ status: "open", converted_event_id: null, converted_at: null })
+      .eq("converted_event_id", eventId)
+      .eq("user_id", userId);
+
+    if (!fullUpdate.error) return;
+    if (!isOptionalSchemaError(fullUpdate.error)) {
+      console.warn("Could not unlink converted EWNs before deleting CE", fullUpdate.error);
+      return;
+    }
+
+    const fallbackUpdate = await supabase
+      .from("ewns")
+      .update({ status: "open", converted_event_id: null })
+      .eq("converted_event_id", eventId)
+      .eq("user_id", userId);
+
+    if (fallbackUpdate.error && !isOptionalSchemaError(fallbackUpdate.error)) {
+      console.warn("Could not unlink converted EWNs before deleting CE", fallbackUpdate.error);
+    }
+  }
+
+  async function deleteRegisterEvent(event: EventRow) {
+    const label = `${displayEventReference(event)} - ${event.title || "Untitled CE"}`;
+    const typedConfirmation = window.prompt(`Delete ${label} and all linked CE/VO records?\n\nThis cannot be undone. Type "delete" to confirm.`);
+    if (typedConfirmation?.trim().toLowerCase() !== "delete") return;
+
+    const previousEvents = events;
+
+    try {
+      setDeletingEventId(event.id);
+      setEvents((prev) => prev.filter((item) => item.id !== event.id));
+
+      const supabase = supabaseBrowser();
+      const user = await getRequiredUser(supabase);
+
+      await unlinkConvertedEwns(supabase, event.id, user.id);
+
+      const fileRows = await (supabase as any).from("event_files").select("file_path").eq("event_id", event.id);
+      const filePaths = Array.isArray(fileRows.data)
+        ? fileRows.data
+            .map((file: { file_path?: string | null }) => file.file_path)
+            .filter((path: string | null | undefined): path is string => Boolean(path))
+        : [];
+      if (filePaths.length > 0) {
+        const storageRemove = await supabase.storage.from("event-files").remove(filePaths);
+        if (storageRemove.error) console.warn("Could not remove CE evidence files from storage", storageRemove.error);
+      } else if (fileRows.error && !isOptionalSchemaError(fileRows.error)) {
+        console.warn("Could not load CE evidence files for deletion", fileRows.error);
+      }
+
+      await optionalDeleteQuery((supabase as any).from("event_actions").delete().eq("event_id", event.id), "action history");
+      await optionalDeleteQuery((supabase as any).from("event_rebuttals").delete().eq("event_id", event.id), "commercial pushback");
+      await optionalDeleteQuery((supabase as any).from("event_ai_drafts").delete().eq("event_id", event.id), "drafts");
+      await optionalDeleteQuery((supabase as any).from("event_packs").delete().eq("event_id", event.id), "packs");
+      await optionalDeleteQuery((supabase as any).from("event_files").delete().eq("event_id", event.id), "files");
+      await optionalDeleteQuery((supabase as any).from("event_review_settings").delete().eq("event_id", event.id), "review settings");
+      await optionalDeleteQuery((supabase as any).from("event_valuation_settings").delete().eq("event_id", event.id), "valuation settings");
+      await optionalDeleteQuery((supabase as any).from("event_prelim_lines").delete().eq("event_id", event.id), "prelims");
+      await optionalDeleteQuery((supabase as any).from("event_resource_lines").delete().eq("event_id", event.id), "resources");
+      await optionalDeleteQuery((supabase as any).from("event_basis").delete().eq("event_id", event.id), "basis");
+
+      const deleteEvent = await (supabase as any).from("events").delete().eq("id", event.id).eq("user_id", user.id);
+      if (deleteEvent.error) throw deleteEvent.error;
+    } catch (err) {
+      console.warn("Failed to delete CE/VO", err);
+      setEvents(previousEvents);
+    } finally {
+      setDeletingEventId(null);
+    }
+  }
+
 
   async function updateRegisterTracking(eventId: string, next: TrackingUpdate) {
     const previous = events.find((e) => e.id === eventId) ?? null;
@@ -1268,34 +1447,18 @@ function AppHomeContent() {
     try {
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
-      const update = await (supabase as any).from("events").update(patch).eq("id", eventId).eq("user_id", user.id);
-
-      if (update.error) {
-        const message = String(update.error.message || "");
-        const fallbackNext: Partial<EventRow> = { ...patch };
-        if (/payment_status/i.test(message)) delete fallbackNext.payment_status;
-        if (/submitted_date/i.test(message)) delete fallbackNext.submitted_date;
-        if (/expected_payment_date/i.test(message)) delete fallbackNext.expected_payment_date;
-        if (/submitted_amount/i.test(message)) delete fallbackNext.submitted_amount;
-        if (/assessed_amount/i.test(message)) delete fallbackNext.assessed_amount;
-        if (/paid_amount/i.test(message)) delete fallbackNext.paid_amount;
-        if (/disallowed_amount/i.test(message)) delete fallbackNext.disallowed_amount;
-        if (/balance_outstanding/i.test(message)) delete fallbackNext.balance_outstanding;
-        if (/last_chased_date/i.test(message)) delete fallbackNext.last_chased_date;
-        if (/next_chase_date/i.test(message)) delete fallbackNext.next_chase_date;
-        if (/client_response/i.test(message)) delete fallbackNext.client_response;
-        if (/dispute_reason/i.test(message)) delete fallbackNext.dispute_reason;
-        if (/agreed_payment_date/i.test(message)) delete fallbackNext.agreed_payment_date;
-        if (/last_action_type/i.test(message)) delete fallbackNext.last_action_type;
-        if (/last_action_date/i.test(message)) delete fallbackNext.last_action_date;
-        if (Object.keys(fallbackNext).length === Object.keys(patch).length) throw update.error;
-        if (Object.keys(fallbackNext).length > 0) {
-          const fallback = await (supabase as any).from("events").update(fallbackNext).eq("id", eventId).eq("user_id", user.id);
-          if (fallback.error) throw fallback.error;
-        }
+      const update = await updateEventTrackingWithFallback(supabase, eventId, user.id, patch);
+      if (!update.saved) {
+        if (hasCoreTrackingChange(next)) throw update.error || new Error("Failed to save CE register tracking.");
+        console.warn("CE register optional tracking stayed local because this database schema rejected it", update.error);
+        return;
       }
 
-      await (supabase as any).from("event_actions").insert({
+      if (update.partial) {
+        console.warn("CE register tracking saved partially because this database schema does not support every recovery field yet.");
+      }
+
+      const actionInsert = await (supabase as any).from("event_actions").insert({
         event_id: eventId,
         user_id: user.id,
         action_type: patch.last_action_type || "tracking_updated",
@@ -1303,9 +1466,12 @@ function AppHomeContent() {
         notes: recoveryActionSummary(patch),
         metadata: patch,
       });
+      if (actionInsert.error) {
+        console.warn("CE register tracking saved without action history", actionInsert.error);
+      }
     } catch (err) {
-      console.error("Failed to update CE register tracking", err);
-      if (previous) setEvents((prev) => prev.map((e) => (e.id === eventId ? previous : e)));
+      console.warn("Failed to update CE register tracking", err);
+      if (previous && hasCoreTrackingChange(next)) setEvents((prev) => prev.map((e) => (e.id === eventId ? previous : e)));
     }
   }
 
@@ -1727,6 +1893,23 @@ function AppHomeContent() {
                               flexWrap: "wrap",
                             }}
                           >
+                            <button
+                              onClick={() => void deleteRegisterEvent(row.event)}
+                              disabled={deletingEventId === row.event.id}
+                              style={{
+                                height: 40,
+                                border: `1px solid ${c.redBd}`,
+                                background: c.redBg,
+                                color: c.redTx,
+                                borderRadius: 12,
+                                padding: "0 14px",
+                                fontWeight: 650,
+                                cursor: deletingEventId === row.event.id ? "not-allowed" : "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {deletingEventId === row.event.id ? "Deleting..." : "Delete CE/VO"}
+                            </button>
                             <button onClick={() => startRename(row.event)} style={{ height: 40, border: `1px solid ${c.border}`, background: c.input, color: c.text, borderRadius: 12, padding: "0 14px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}>Rename</button>
                             <Link href={primaryAction.href} style={{ textDecoration: "none", display: "inline-flex" }}>
                               <button style={{ height: 40, border: `1px solid ${c.black}`, background: c.black, color: c.blackContrast, borderRadius: 12, padding: "0 16px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}>{primaryAction.label}</button>

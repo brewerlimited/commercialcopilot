@@ -42,9 +42,9 @@ export function SiteShell({ children }: { children: ReactNode }) {
 export function TopBar() {
   const linkStyle: CSSProperties = {
     textDecoration: "none",
-    color: m.sub,
+    color: "#1f2937",
     fontSize: 14,
-    fontWeight: 600,
+    fontWeight: 700,
   };
 
   return (
@@ -53,7 +53,7 @@ export function TopBar() {
         position: "sticky",
         top: 0,
         zIndex: 20,
-        background: "var(--topbar-bg)",
+        background: "rgba(255, 255, 255, 0.86)",
         backdropFilter: "blur(10px)",
         borderBottom: `1px solid ${m.border}`,
       }}
@@ -78,41 +78,54 @@ export function TopBar() {
                 width: 38,
                 height: 38,
                 borderRadius: 12,
-                border: `1px solid ${m.border}`,
-                background: m.card,
+                border: "1px solid rgba(15, 23, 42, 0.10)",
+                background: "#0f172a",
                 display: "grid",
                 placeItems: "center",
                 fontWeight: 800,
-                color: m.black,
+                color: "#ffffff",
               }}
             >
               CC
             </div>
             <div style={{ lineHeight: 1.1 }}>
-              <div style={{ fontWeight: 800, letterSpacing: 0, color: m.black }}>Commercial Co-Pilot</div>
-              <div style={{ fontSize: 12, color: m.sub }}>EWN, CE and recovery control.</div>
+              <div style={{ fontWeight: 800, letterSpacing: 0, color: "#0f172a" }}>Commercial Co-Pilot</div>
+              <div style={{ fontSize: 12, color: "#b45309", fontWeight: 700 }}>Built for subcontractors</div>
             </div>
           </div>
         </Link>
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", justifyContent: "flex-end" }}>
           <nav style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <Link href="/#features" style={linkStyle}>Features</Link>
+            <Link href="/#how-it-works" style={linkStyle}>How It Works</Link>
+            <Link href="/#outputs" style={linkStyle}>Outputs</Link>
             <Link href="/pricing" style={linkStyle}>Pricing</Link>
-            <Link href="/terms" style={linkStyle}>Terms</Link>
-            <Link href="/privacy" style={linkStyle}>Privacy</Link>
-            <Link href="/disclaimer" style={linkStyle}>Disclaimer</Link>
-            <Link href="/contact" style={linkStyle}>Contact</Link>
+            <Link href="/#about" style={linkStyle}>About</Link>
           </nav>
           <Link
             href="/login"
             style={{
               ...baseButton,
-              border: `1px solid ${m.border}`,
-              background: m.card,
-              color: m.black,
+              minHeight: 44,
+              border: "1px solid rgba(15, 23, 42, 0.18)",
+              background: "#ffffff",
+              color: "#0f172a",
             }}
           >
-            Login
+            Log In
+          </Link>
+          <Link
+            href="/login"
+            style={{
+              ...baseButton,
+              minHeight: 44,
+              border: "1px solid #0f172a",
+              background: "#0f172a",
+              color: "#ffffff",
+            }}
+          >
+            Start Free Trial
           </Link>
         </div>
       </div>
@@ -142,7 +155,7 @@ export function SiteFooter() {
           flexWrap: "wrap",
         }}
       >
-        <div style={{ color: m.sub, fontSize: 14 }}>Commercial Co-Pilot — EWN, CE and recovery control for subcontractors.</div>
+        <div style={{ color: m.sub, fontSize: 14 }}>Commercial Co-Pilot — commercial management and recovery software for subcontractors.</div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <Link href="/pricing" style={linkStyle}>Pricing</Link>
           <Link href="/terms" style={linkStyle}>Terms</Link>

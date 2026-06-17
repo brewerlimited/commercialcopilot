@@ -140,6 +140,8 @@ const PROJECTS = [
   "Westgate Residential Block C",
 ];
 
+const DEMO_SEED_MARKER = "commercial-copilot-demo-seed";
+
 function isMissingOptionalTable(error: any) {
   const msg = String(error?.message || "").toLowerCase();
   return msg.includes("does not exist") || msg.includes("schema cache") || msg.includes("relation");
@@ -369,6 +371,14 @@ function money(v: number) {
   return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }).format(v || 0);
 }
 
+function seedPaymentStatusForInsert(status: string) {
+  // Some live tester databases still have the older events_payment_status_allowed
+  // constraint that accepts "applied" but not the newer "submitted_for_payment".
+  // The app normalises "applied" back to "submitted_for_payment" for display,
+  // so this keeps demo seeding compatible without changing the user's database.
+  return status === "submitted_for_payment" ? "applied" : status;
+}
+
 function lineTotal(r: DemoResource) {
   if (r.unit === "hour") return Number(r.hours || 0) * Number(r.qty || 0) * Number(r.rate || 0);
   return Number(r.qty || 0) * Number(r.rate || 0);
@@ -415,6 +425,7 @@ function financialSummary(e: DemoEvent) {
   const feeBase = e.fee_basis === "defined_cost_plus_prelims" ? resources_total + prelims_total : resources_total;
   const fee_amount = feeBase * (Number(e.fee_percent || 0) / 100);
   return {
+    seed_marker: DEMO_SEED_MARKER,
     resources_total,
     prelims_total,
     fee_percent: e.fee_percent,
@@ -970,6 +981,58 @@ async function isAdminEmail(email?: string | null) {
   return checkAdminWithServiceRole(supabaseAdmin(), normalized);
 }
 
+async function collectExistingDemoEventIds(admin: any, userId: string) {
+  const ids = new Set<string>();
+  const eventTitles = EVENTS.map((event) => event.title);
+  const eventReferences = EVENTS.map((event) => event.event_reference);
+
+  const queries = [
+    (admin as any).from("events").select("id").eq("user_id", userId).in("project_name", PROJECTS),
+    (admin as any).from("events").select("id").eq("user_id", userId).in("title", eventTitles),
+    (admin as any).from("events").select("id").eq("user_id", userId).in("event_reference", eventReferences),
+    (admin as any).from("events").select("id").eq("user_id", userId).eq("event_financial_summary->>seed_marker", DEMO_SEED_MARKER),
+  ];
+
+  for (const query of queries) {
+    const result = await query;
+    if (result.error) {
+      if (isMissingOptionalTable(result.error) || isMissingColumn(result.error, "event_financial_summary")) continue;
+      throw result.error;
+    }
+    for (const row of result.data || []) {
+      if (row?.id) ids.add(row.id);
+    }
+  }
+
+  return Array.from(ids);
+}
+
+function assertNoDuplicateDemoResourceRows(rows: any[]) {
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+
+  for (const row of rows) {
+    const key = [
+      row.event_id,
+      row.category,
+      row.item_name,
+      row.start_date || "",
+      row.end_date || "",
+      row.linked_event || "",
+      row.notes || "",
+    ].join("||").toLowerCase();
+
+    if (seen.has(key)) {
+      duplicates.push(`${row.item_name} / ${row.linked_event || "General activity"} / ${row.start_date || "no date"}`);
+    }
+    seen.add(key);
+  }
+
+  if (duplicates.length) {
+    throw new Error(`Demo seed contains duplicate resource activity rows: ${duplicates.join("; ")}`);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const adminUser = await getAuthUserFromRequest(req);
@@ -986,11 +1049,34 @@ export async function POST(req: NextRequest) {
     const target = ((users.data as { users?: Array<{ id?: string; email?: string | null }> } | null)?.users ?? []).find((u: { id?: string; email?: string | null }) => normalizeEmail(u.email) === targetEmail);
     if (!target?.id) return NextResponse.json({ error: `No Supabase auth user found for ${targetEmail}` }, { status: 404 });
 
-    const existingEvents = await (admin as any).from("events").select("id").eq("user_id", target.id).in("project_name", PROJECTS);
-    if (existingEvents.error) throw existingEvents.error;
-    const oldIds = (existingEvents.data || []).map((x: any) => x.id).filter(Boolean);
+    const oldIds = await collectExistingDemoEventIds(admin, target.id);
+
+    const oldEwnIds = new Set<string>();
+    const ewnTitles = EWNS.map((ewn) => ewn.title);
+    const existingEwnQueries = [
+      (admin as any).from("ewns").select("id").eq("user_id", target.id).in("project_name", PROJECTS),
+      (admin as any).from("ewns").select("id").eq("user_id", target.id).in("title", ewnTitles),
+      oldIds.length ? (admin as any).from("ewns").select("id").eq("user_id", target.id).in("converted_event_id", oldIds) : null,
+    ].filter(Boolean);
+
+    for (const query of existingEwnQueries) {
+      const result = await query;
+      if (result.error) {
+        if (isMissingOptionalTable(result.error) || isMissingColumn(result.error, "converted_event_id")) continue;
+        throw result.error;
+      }
+      for (const row of result.data || []) {
+        if (row?.id) oldEwnIds.add(row.id);
+      }
+    }
+
+    if (oldEwnIds.size) {
+      const ewnDelete = await (admin as any).from("ewns").delete().eq("user_id", target.id).in("id", Array.from(oldEwnIds));
+      if (ewnDelete.error) throw ewnDelete.error;
+    }
 
     if (oldIds.length) {
+      await optionalQuery((admin as any).from("event_actions").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_rebuttals").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_ai_drafts").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_packs").delete().in("event_id", oldIds));
@@ -1004,8 +1090,7 @@ export async function POST(req: NextRequest) {
       if (eventDelete.error) throw eventDelete.error;
     }
 
-    const ewnDelete = await (admin as any).from("ewns").delete().eq("user_id", target.id).in("project_name", PROJECTS);
-    if (ewnDelete.error) throw ewnDelete.error;
+    await optionalQuery((admin as any).from("projects").delete().eq("user_id", target.id).in("project_name", PROJECTS));
 
     const now = new Date().toISOString();
     const eventIds = new Map<string, string>();
@@ -1028,7 +1113,7 @@ export async function POST(req: NextRequest) {
         event_date: e.event_date,
         notice_period_days: e.notice_period_days,
         notification_deadline: addDays(e.event_date, e.notice_period_days),
-        payment_status: e.payment_status,
+        payment_status: seedPaymentStatusForInsert(e.payment_status),
         submitted_date: e.submitted_date,
         expected_payment_date: e.expected_payment_date,
         last_action_type: e.last_action_type,
@@ -1070,6 +1155,7 @@ export async function POST(req: NextRequest) {
         };
       });
     });
+    assertNoDuplicateDemoResourceRows(resourceRows);
     const resourceInsert = await insertResourceRowsWithUnitFallback(admin, resourceRows);
     if (resourceInsert.error) throw resourceInsert.error;
 

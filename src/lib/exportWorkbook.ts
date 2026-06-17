@@ -179,127 +179,6 @@ function hasAnyAiDraftText(aiDraft?: any) {
   return Boolean(draft && Object.values(draft).some((v) => String(v ?? "").trim()));
 }
 
-function buildCommercialNarrativeSheet(payload: WorkbookPayload, aiDraft?: AiDraftSections): Sheet | null {
-  const review = payload.review || {};
-  const wantsNarrative = Boolean(
-    review.include_basis ||
-    review.include_entitlement ||
-    review.include_time_impact ||
-    review.include_risk_notes
-  );
-
-  if (!wantsNarrative || !hasAnyAiDraftText(aiDraft)) return null;
-
-  const rows: Row[] = [
-    ...titleRows("Commercial Narrative", "Selected submission pack narrative sections", 4),
-  ];
-
-  if (review.include_basis) {
-    rows.push(...aiSectionRows("Background", aiText(aiDraft, "background"), 4));
-    rows.push(...aiSectionRows("Change to Contract Basis", aiText(aiDraft, "change_to_contract_basis"), 4));
-  }
-
-  if (review.include_entitlement) {
-    rows.push(...aiSectionRows("Contractual Position", aiText(aiDraft, "contractual_position"), 4));
-  }
-
-  if (review.include_time_impact) {
-    rows.push(...aiSectionRows("Time Impact Summary", aiText(aiDraft, "effect_on_programme"), 4));
-  }
-
-  if (review.include_risk_notes) {
-    rows.push(...aiSectionRows("Assumptions", aiText(aiDraft, "assumptions"), 4));
-  }
-
-  if (review.include_cost_summary || review.include_prelims_fee) {
-    rows.push(...aiSectionRows("Commercial Impact", aiText(aiDraft, "commercial_impact"), 4));
-    rows.push(...aiSectionRows("Effect on Defined Cost", aiText(aiDraft, "effect_on_defined_cost"), 4));
-  }
-
-  rows.push(...aiSectionRows("Conclusion", aiText(aiDraft, "conclusion"), 4));
-
-  return rows.length > 3 ? { name: "Commercial Narrative", columns: [220, 220, 220, 220], rows } : null;
-}
-
-function buildInternalPushbackSheet(aiDraft?: any, companyProfile?: CompanyProfile): Sheet | null {
-  const intelligence = aiDraft?.internal_commercial_intelligence || {};
-  const direct = intelligence?.commercial_pushback || aiDraft?.commercial_pushback;
-  const rows: Row[] = [
-    ...titleRows("Commercial Pushback", "Internal-only commercial challenge and rebuttal notes", 4),
-    [
-      { value: "Challenge / theme", style: "header" },
-      { value: "Defence / response note", style: "header", mergeAcross: 2 },
-    ],
-  ];
-
-  let hasContent = false;
-
-  if (Array.isArray(direct) && direct.length > 0) {
-    hasContent = true;
-    direct.forEach((item: any) => {
-      rows.push([
-        { value: item?.likely_challenge || item?.challenge || item?.heading || "Commercial challenge", style: "cellWrap" },
-        { value: item?.defence_position || item?.defence_note || item?.note || item?.response || "", style: "cellWrap", mergeAcross: 2 },
-      ]);
-    });
-  }
-
-  const strengthSummary = String(intelligence?.strength_summary || aiDraft?.strength_summary || "").trim();
-  if (strengthSummary) {
-    hasContent = true;
-    rows.push(
-      [],
-      [{ value: "Strength Summary", style: "section", mergeAcross: 3 }],
-      [{ value: strengthSummary, style: "body", mergeAcross: 3 }],
-    );
-  }
-
-  const evidenceGaps = Array.isArray(intelligence?.evidence_gaps) ? intelligence.evidence_gaps : aiDraft?.evidence_gaps;
-  if (Array.isArray(evidenceGaps) && evidenceGaps.length > 0) {
-    hasContent = true;
-    rows.push([], [{ value: "Evidence Gaps", style: "section", mergeAcross: 3 }]);
-    evidenceGaps.forEach((gap: any, index: number) => {
-      rows.push([
-        { value: `Gap ${index + 1}`, style: "cellWrap" },
-        { value: String(gap || ""), style: "cellWrap", mergeAcross: 2 },
-      ]);
-    });
-  }
-
-  const internalRiskNotes = Array.isArray(intelligence?.internal_risk_notes)
-    ? intelligence.internal_risk_notes
-    : aiDraft?.internal_risk_notes;
-  if (Array.isArray(internalRiskNotes) && internalRiskNotes.length > 0) {
-    hasContent = true;
-    rows.push([], [{ value: "Internal Risk Notes", style: "section", mergeAcross: 3 }]);
-    internalRiskNotes.forEach((note: any, index: number) => {
-      rows.push([
-        { value: `Risk note ${index + 1}`, style: "cellWrap" },
-        { value: String(note || ""), style: "cellWrap", mergeAcross: 2 },
-      ]);
-    });
-  }
-
-  if (!hasContent) {
-    const fallback = [
-      intelligence?.risk_note,
-      intelligence?.negotiation_position,
-      aiDraft?.risk_note,
-    ].map((x) => String(x ?? "").trim()).filter(Boolean);
-
-    if (fallback.length === 0) return null;
-
-    fallback.forEach((note, index) => {
-      rows.push([
-        { value: `Internal note ${index + 1}`, style: "cellWrap" },
-        { value: note, style: "cellWrap", mergeAcross: 2 },
-      ]);
-    });
-  }
-
-  return { name: "Commercial Pushback", columns: [220, 260, 260, 120], rows };
-}
-
 type Cell = {
   value?: string | number;
   style?: string;
@@ -482,7 +361,6 @@ function buildStructuredRows(lines: ExportResourceLine[], itemLabel: string): Ro
 }
 
 function buildSummarySheet(payload: WorkbookPayload, aiDraft?: AiDraftSections): Sheet {
-  const staffResourceLines = payload.resources.filter((x) => x.category === "staff" || (x.category === "labour" && looksLikeStaff(x.item_name, x.notes)));
   const staffPrelimLines = payload.prelims
     .filter((x) => (x.prelim_type ?? "prelim") === "staff")
     .map((x) => ({
@@ -497,8 +375,7 @@ function buildSummarySheet(payload: WorkbookPayload, aiDraft?: AiDraftSections):
       start_date: null,
       end_date: null,
     } as ExportResourceLine));
-  // Staff prelims belong on the Prelims + Fee sheet, not the Labour & Plant schedule.
-  const staff = staffResourceLines;
+  // Staff prelims belong on the Prelims + Fee sheet, not the Labour schedule.
   const labour = payload.resources.filter((x) => x.category === "labour" && !looksLikeStaff(x.item_name, x.notes));
   const plant = payload.resources.filter((x) => x.category === "plant" || x.category === "equipment");
   const materials = payload.resources.filter((x) => x.category === "material" || x.category === "materials");
@@ -512,8 +389,6 @@ function buildSummarySheet(payload: WorkbookPayload, aiDraft?: AiDraftSections):
   const feeAmount = feeBase * ((Number(payload.valuation.fee_percent) || 0) / 100);
   const total = definedCost + prelimsTotal + feeAmount;
   const contractFamily = getContractFamily(payload.meta.contractType);
-  const costLabel = getCostLabel(payload.meta.contractType);
-  const feeBasisLabel = getFeeBasisLabel(payload.meta.contractType, payload.valuation.fee_basis);
 
   const activityMap = new Map<string, number>();
   for (const line of payload.resources) {
@@ -521,13 +396,14 @@ function buildSummarySheet(payload: WorkbookPayload, aiDraft?: AiDraftSections):
     activityMap.set(activity, (activityMap.get(activity) || 0) + (Number(line.total) || 0));
   }
 
-  const labourPlantLines = [...labour, ...plant];
-  const labourPlantTotal = labourPlantLines.reduce((s, x) => s + (Number(x.total) || 0), 0);
+  const labourTotal = labour.reduce((s, x) => s + (Number(x.total) || 0), 0);
+  const plantTotal = plant.reduce((s, x) => s + (Number(x.total) || 0), 0);
   const materialTotal = materials.reduce((s, x) => s + (Number(x.total) || 0), 0);
   const chargesTotal = charges.reduce((s, x) => s + (Number(x.total) || 0), 0);
   const costSummaryIncluded = Boolean(payload.review.include_cost_summary);
   const prelimsIncluded = Boolean(payload.review.include_prelims_fee);
-  const labourPlantFormula = costSummaryIncluded ? sheetFormulaRef("Labour & Plant", resourceSheetTotalCell(labourPlantLines, "Resource")) : undefined;
+  const labourFormula = costSummaryIncluded ? sheetFormulaRef("Labour", resourceSheetTotalCell(labour, "Labour")) : undefined;
+  const plantFormula = costSummaryIncluded ? sheetFormulaRef("Plant", resourceSheetTotalCell(plant, "Plant")) : undefined;
   const materialFormula = costSummaryIncluded ? sheetFormulaRef("Materials", resourceSheetTotalCell(materials, "Material")) : undefined;
   const chargesFormula = costSummaryIncluded ? sheetFormulaRef("Subcontract", resourceSheetTotalCell(charges, "Subcontract / charge")) : undefined;
   const prelimsSheetForRefs = prelimsIncluded ? buildPrelimsSheet(payload, aiDraft) : null;
@@ -544,18 +420,19 @@ function buildSummarySheet(payload: WorkbookPayload, aiDraft?: AiDraftSections):
     [{ value: "Delay days", style: "label" }, { value: Number(payload.meta.delayDays) || 0, style: "value", type: "Number" }, { value: "Readiness", style: "label" }, { value: `${payload.readiness}%`, style: "value" }],
     [],
     [{ value: "Value summary", style: "section", mergeAcross: 4 }],
-    [{ value: "Labour & Plant", style: "label" }, { value: money(labourPlantTotal), cachedValue: money(labourPlantTotal), formula: labourPlantFormula, style: "currency", type: "Number" }, { value: "Blockers", style: "label" }, { value: payload.blockers, style: "value", type: "Number" }],
-    [{ value: "Materials", style: "label" }, { value: money(materialTotal), cachedValue: money(materialTotal), formula: materialFormula, style: "currency", type: "Number" }, { value: "Warnings", style: "label" }, { value: payload.warnings, style: "value", type: "Number" }],
-    [{ value: "Subcontract / charges", style: "label" }, { value: money(chargesTotal), cachedValue: money(chargesTotal), formula: chargesFormula, style: "currency", type: "Number" }, { value: "Basis included", style: "label" }, { value: payload.review.include_basis ? "Yes" : "No", style: "value" }],
-    [{ value: "Prelims total", style: "label" }, { value: money(prelimsTotal), cachedValue: money(prelimsTotal), formula: prelimsFormula, style: "currency", type: "Number" }, { value: "Evidence register", style: "label" }, { value: payload.review.include_evidence_register ? "Included" : "Excluded", style: "value" }],
-    [{ value: `Fee (${payload.valuation.fee_percent || 0}%)`, style: "label" }, { value: money(feeAmount), cachedValue: money(feeAmount), formula: feeFormula, style: "currency", type: "Number" }, { value: "Internal pushback", style: "label" }, { value: payload.review.include_commercial_pushback ? "Included" : "Excluded", style: "value" }],
+    [{ value: "Labour", style: "label" }, { value: money(labourTotal), cachedValue: money(labourTotal), formula: labourFormula, style: "currency", type: "Number" }, { value: "Blockers", style: "label" }, { value: payload.blockers, style: "value", type: "Number" }],
+    [{ value: "Plant", style: "label" }, { value: money(plantTotal), cachedValue: money(plantTotal), formula: plantFormula, style: "currency", type: "Number" }, { value: "Warnings", style: "label" }, { value: payload.warnings, style: "value", type: "Number" }],
+    [{ value: "Materials", style: "label" }, { value: money(materialTotal), cachedValue: money(materialTotal), formula: materialFormula, style: "currency", type: "Number" }, { value: "Basis included", style: "label" }, { value: payload.review.include_basis ? "Yes" : "No", style: "value" }],
+    [{ value: "Subcontract / charges", style: "label" }, { value: money(chargesTotal), cachedValue: money(chargesTotal), formula: chargesFormula, style: "currency", type: "Number" }, { value: "Evidence register", style: "label" }, { value: payload.review.include_evidence_register ? "Included" : "Excluded", style: "value" }],
+    [{ value: "Prelims total", style: "label" }, { value: money(prelimsTotal), cachedValue: money(prelimsTotal), formula: prelimsFormula, style: "currency", type: "Number" }, { value: "Prelims + Fee", style: "label" }, { value: payload.review.include_prelims_fee ? "Included" : "Excluded", style: "value" }],
+    [{ value: `Fee (${payload.valuation.fee_percent || 0}%)`, style: "label" }, { value: money(feeAmount), cachedValue: money(feeAmount), formula: feeFormula, style: "currency", type: "Number" }, { value: "Time impact", style: "label" }, { value: payload.review.include_time_impact ? "Included" : "Excluded", style: "value" }],
     [{ value: "Total CE value", style: "totalLabel" }, { value: money(total), cachedValue: money(total), style: "total", type: "Number" }, { value: "Delay days", style: "label" }, { value: String(payload.meta.delayDays || 0), style: "value" }],
     [],
     [{ value: "Activity summary", style: "section", mergeAcross: 4 }],
     [{ value: "Activity", style: "header" }, { value: "Value", style: "header" }, { value: "% of direct cost", style: "header" }, { value: "", style: "header" }],
   ];
 
-  const summaryValueRows = ["Labour & Plant", "Materials", "Subcontract / charges", "Prelims total", `Fee (${payload.valuation.fee_percent || 0}%)`]
+  const summaryValueRows = ["Labour", "Plant", "Materials", "Subcontract / charges", "Prelims total", `Fee (${payload.valuation.fee_percent || 0}%)`]
     .map((label) => rows.findIndex((row) => String(row?.[0]?.value ?? "") === label) + 1)
     .filter((rowNumber) => rowNumber > 0);
   const summaryTotalIndex = rows.findIndex((row) => String(row?.[0]?.value ?? "") === "Total CE value");
@@ -694,7 +571,7 @@ function buildPrelimsSheet(payload: WorkbookPayload, aiDraft?: AiDraftSections):
   let otherCostStartRow = 0;
   let otherCostEndRow = 0;
 
-  const writePrelimRows = (lines: ExportPrelimLine[], emptyLabel: string, includeSpareRows = true) => {
+  const writePrelimRows = (lines: ExportPrelimLine[], emptyLabel: string) => {
     const firstRow = rows.length + 1;
 
     if (lines.length === 0) {
@@ -744,7 +621,7 @@ function buildPrelimsSheet(payload: WorkbookPayload, aiDraft?: AiDraftSections):
   );
   const definedCostRow = rows.length + 1;
   const definedCostFormula = payload.review.include_cost_summary
-    ? `${sheetFormulaRef("Labour & Plant", resourceSheetTotalCell(payload.resources.filter((x) => (x.category === "labour" && !looksLikeStaff(x.item_name, x.notes)) || x.category === "plant" || x.category === "equipment"), "Resource"))}+${sheetFormulaRef("Materials", resourceSheetTotalCell(payload.resources.filter((x) => x.category === "material" || x.category === "materials"), "Material"))}+${sheetFormulaRef("Subcontract", resourceSheetTotalCell(payload.resources.filter((x) => x.category === "subcontract" || x.category === "charge" || x.category === "charges"), "Subcontract / charge"))}`
+    ? `${sheetFormulaRef("Labour", resourceSheetTotalCell(payload.resources.filter((x) => x.category === "labour" && !looksLikeStaff(x.item_name, x.notes)), "Labour"))}+${sheetFormulaRef("Plant", resourceSheetTotalCell(payload.resources.filter((x) => x.category === "plant" || x.category === "equipment"), "Plant"))}+${sheetFormulaRef("Materials", resourceSheetTotalCell(payload.resources.filter((x) => x.category === "material" || x.category === "materials"), "Material"))}+${sheetFormulaRef("Subcontract", resourceSheetTotalCell(payload.resources.filter((x) => x.category === "subcontract" || x.category === "charge" || x.category === "charges"), "Subcontract / charge"))}`
     : undefined;
   rows.push([{ value: costLabel, style: "label" }, { value: money(definedCost), cachedValue: money(definedCost), formula: definedCostFormula, style: "currency", type: "Number" }, { value: "", style: "label", mergeAcross: 4 }]);
   rows.push([{ value: "Staff prelims", style: "label" }, { value: money(staffPrelimsTotal), cachedValue: money(staffPrelimsTotal), formula: `E${staffTotalRow}`, style: "currency", type: "Number" }, { value: "", style: "label", mergeAcross: 4 }]);
@@ -797,107 +674,6 @@ function buildTimeRiskSheet(payload: WorkbookPayload, aiDraft?: AiDraftSections)
   return { name: "Time Impact", columns: [160, 120, 160, 260], rows };
 }
 
-function buildAuditSheet(payload: WorkbookPayload, aiDraft?: AiDraftSections): Sheet {
-  const totalEvidence = payload.fileCounts.instructions + payload.fileCounts.photos + payload.fileCounts.site_records + payload.fileCounts.programme + payload.fileCounts.cost_support;
-  const rows: Row[] = [
-    ...titleRows("Audit", "Generation metadata and checks", 4),
-    [{ value: "Generated at", style: "label" }, { value: new Date(payload.meta.generatedAt || new Date().toISOString()).toLocaleString("en-GB"), style: "value", mergeAcross: 2 }],
-    [{ value: "Readiness score", style: "label" }, { value: `${payload.readiness}%`, style: "value" }, { value: "Blockers", style: "label" }, { value: payload.blockers, style: "value", type: "Number" }],
-    [{ value: "Warnings", style: "label" }, { value: payload.warnings, style: "value", type: "Number" }, { value: "Resource lines", style: "label" }, { value: payload.resources.length, style: "value", type: "Number" }],
-    [{ value: "Evidence files", style: "label" }, { value: totalEvidence, style: "value", type: "Number" }, { value: "Prelim lines", style: "label" }, { value: payload.prelims.length, style: "value", type: "Number" }],
-    [],
-    [{ value: "Output selections", style: "section", mergeAcross: 3 }],
-    [{ value: "Basis narrative", style: "label" }, { value: payload.review.include_basis ? "Included" : "Excluded", style: "value" }, { value: "Evidence register", style: "label" }, { value: payload.review.include_evidence_register ? "Included" : "Excluded", style: "value" }],
-    [{ value: "Cost summary", style: "label" }, { value: payload.review.include_cost_summary ? "Included" : "Excluded", style: "value" }, { value: "Prelims + Fee", style: "label" }, { value: payload.review.include_prelims_fee ? "Included" : "Excluded", style: "value" }],
-    [{ value: "Output format", style: "label" }, { value: "Excel workbook", style: "value" }, { value: "Client output", style: "label" }, { value: "Submission pack", style: "value" }],
-  ];
-  rows.push(...aiSectionRows("Assumptions", aiText(aiDraft, "assumptions"), 4));
-
-  return { name: "Audit", columns: [180, 130, 180, 130], rows };
-}
-
-function buildPromptWiringAuditSheet(aiDraft?: any): Sheet | null {
-  const audit = aiDraft?.multi_stage_section_wiring_audit;
-  const diagnostics = Array.isArray(aiDraft?.multi_stage_diagnostics) ? aiDraft.multi_stage_diagnostics : [];
-
-  if (!audit && diagnostics.length === 0) return null;
-
-  const rows: Row[] = [
-    ...titleRows("Prompt Wiring Audit", "Pass 1.5 multi-stage prompt call, storage and export mapping", 5),
-    [
-      { value: "Section", style: "header" },
-      { value: "Prompt agent", style: "header" },
-      { value: "Stored key", style: "header" },
-      { value: "Generated", style: "header" },
-      { value: "Workbook tab(s)", style: "header" },
-    ],
-  ];
-
-  const clientOutput = audit?.client_output || {};
-  Object.entries(clientOutput).forEach(([section, info]: [string, any]) => {
-    rows.push([
-      { value: section, style: "cellWrap" },
-      { value: info?.promptAgent || "—", style: "cellWrap" },
-      { value: info?.storedKey || "—", style: "cellWrap" },
-      { value: info?.generated ? "Yes" : "No", style: "value" },
-      { value: Array.isArray(info?.excelTabs) ? info.excelTabs.join(", ") : "—", style: "cellWrap" },
-    ]);
-  });
-
-  const internalIntel = audit?.internal_commercial_intelligence || {};
-  if (Object.keys(internalIntel).length > 0) {
-    rows.push([], [{ value: "Internal commercial intelligence", style: "section", mergeAcross: 4 }]);
-    Object.entries(internalIntel).forEach(([section, info]: [string, any]) => {
-      rows.push([
-        { value: section, style: "cellWrap" },
-        { value: info?.promptAgent || "—", style: "cellWrap" },
-        { value: info?.storedKey || "—", style: "cellWrap" },
-        { value: info?.generated ? "Yes" : "No", style: "value" },
-        { value: Array.isArray(info?.excelTabs) ? info.excelTabs.join(", ") : "—", style: "cellWrap" },
-      ]);
-    });
-  }
-
-  if (audit?.rebuttal) {
-    rows.push(
-      [],
-      [{ value: "Rebuttal", style: "section", mergeAcross: 4 }],
-      [
-        { value: "rebuttal", style: "cellWrap" },
-        { value: String(audit.rebuttal.promptRouter || "getRebuttalPrompt(payload)"), style: "cellWrap" },
-        { value: String(audit.rebuttal.route || "app/api/generate-rebuttal/route.ts"), style: "cellWrap" },
-        { value: "Separate route", style: "value" },
-        { value: String(audit.rebuttal.note || "Not part of initial workbook export."), style: "cellWrap" },
-      ],
-    );
-  }
-
-  if (diagnostics.length > 0) {
-    rows.push(
-      [],
-      [{ value: "Generation diagnostics", style: "section", mergeAcross: 4 }],
-      [
-        { value: "Stage", style: "header" },
-        { value: "Status", style: "header" },
-        { value: "Attempt", style: "header" },
-        { value: "Message", style: "header", mergeAcross: 1 },
-      ],
-    );
-
-    diagnostics.forEach((item: any) => {
-      rows.push([
-        { value: item?.stage || "—", style: "cellWrap" },
-        { value: item?.status || "—", style: "value" },
-        { value: item?.attempt ? String(item.attempt) : "—", style: "value" },
-        { value: item?.error || "", style: "cellWrap", mergeAcross: 1 },
-      ]);
-    });
-  }
-
-  return { name: "Prompt Wiring Audit", columns: [190, 230, 260, 90, 280], rows };
-}
-
-
 function estimateTextLength(value: unknown) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   if (!text) return 0;
@@ -921,7 +697,7 @@ function getColumnRules(sheetName: string, columnCount: number): ColumnRule[] {
   if (sheetName === "Summary") {
     return [
       { mode: "fixed", min: 170, width: 170 },
-      { mode: "fixed", min: 115, width: 115 },
+      { mode: "fixed", min: 120, width: 120 },
       { mode: "fixed", min: 135, width: 135 },
       { mode: "fixed", min: 165, width: 165 },
     ];
@@ -936,7 +712,7 @@ function getColumnRules(sheetName: string, columnCount: number): ColumnRule[] {
     ];
   }
 
-  if (sheetName === "Labour & Plant" || sheetName === "Materials" || sheetName === "Subcontract") {
+  if (sheetName === "Labour" || sheetName === "Plant" || sheetName === "Materials" || sheetName === "Subcontract") {
     return [
       { mode: "auto", min: 150, max: 240, padding: 14 },
       { mode: "fixed", min: 80, width: 80 },
@@ -1183,7 +959,7 @@ function workbookXml(sheets: Sheet[], companyName = "Commercial Co-Pilot") {
 
 function buildCeWorkbookSheets(payload: WorkbookPayload, aiDraft?: AiDraftSections): Sheet[] {
   const review = payload.review || {};
-  // Staff prelims are exported on the Prelims + Fee sheet only, not Labour & Plant.
+  // Staff prelims are exported on the Prelims + Fee sheet only, not the Labour sheet.
   const labour = payload.resources.filter((x) => x.category === "labour" && !looksLikeStaff(x.item_name, x.notes));
   const plant = payload.resources.filter((x) => x.category === "plant" || x.category === "equipment");
   const material = payload.resources.filter((x) => x.category === "material" || x.category === "materials");
@@ -1195,7 +971,8 @@ function buildCeWorkbookSheets(payload: WorkbookPayload, aiDraft?: AiDraftSectio
 
   if (review.include_cost_summary) {
     sheets.push(
-      buildSheetFromLines("Labour & Plant", [...labour, ...plant], "Resource", payload.companyProfile),
+      buildSheetFromLines("Labour", labour, "Labour", payload.companyProfile),
+      buildSheetFromLines("Plant", plant, "Plant", payload.companyProfile),
       buildSheetFromLines("Materials", material, "Material", payload.companyProfile),
       buildSheetFromLines("Subcontract", charges, "Subcontract / charge", payload.companyProfile),
     );
@@ -1206,14 +983,6 @@ function buildCeWorkbookSheets(payload: WorkbookPayload, aiDraft?: AiDraftSectio
 
   const evidenceSheet = buildEvidenceSheet(payload);
   if (evidenceSheet) sheets.push(evidenceSheet);
-
-  if (review.include_commercial_pushback) {
-    const internalPushbackSheet = buildInternalPushbackSheet(aiDraft as any, payload.companyProfile);
-    if (internalPushbackSheet) sheets.push(internalPushbackSheet);
-  }
-
-  const promptWiringAuditSheet = buildPromptWiringAuditSheet(aiDraft as any);
-  if (promptWiringAuditSheet) sheets.push(promptWiringAuditSheet);
 
   return sheets;
 }

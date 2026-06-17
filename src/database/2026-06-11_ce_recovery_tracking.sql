@@ -65,6 +65,7 @@ alter table public.event_actions enable row level security;
 
 drop policy if exists event_actions_select_own on public.event_actions;
 drop policy if exists event_actions_insert_own on public.event_actions;
+drop policy if exists event_actions_delete_own on public.event_actions;
 
 create policy event_actions_select_own
   on public.event_actions for select
@@ -73,6 +74,10 @@ create policy event_actions_select_own
 create policy event_actions_insert_own
   on public.event_actions for insert
   with check (auth.uid() = user_id);
+
+create policy event_actions_delete_own
+  on public.event_actions for delete
+  using (auth.uid() = user_id);
 
 create index if not exists idx_event_actions_event_id_created_at
   on public.event_actions (event_id, created_at desc);
