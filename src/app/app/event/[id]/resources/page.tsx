@@ -143,8 +143,7 @@ function normaliseActivityValue(value?: string | null, fallback = "") {
 function getActivityKey(activity: { title?: string | null; date?: string | null; notes?: string | null }) {
   const title = normaliseActivityValue(activity.title, "General activity") || "General activity";
   const date = normaliseActivityValue(activity.date);
-  const notes = normaliseActivityValue(activity.notes, "General notes") || "General notes";
-  return [title, date, notes].join("||").toLowerCase();
+  return [title, date].join("||").toLowerCase();
 }
 
 function getHiddenActivityStorageKey(tab: Category, bucketKey: string) {
@@ -173,6 +172,65 @@ function sourceDetailForRateCard(rateCard?: RateCard | null) {
     return `Base ${money(Number(rateCard.ceca_rate ?? rateCard.rate ?? 0))}/${rateCard.unit}`;
   }
   return `${money(Number(rateCard.rate ?? 0))}/${rateCard.unit}`;
+}
+
+function normaliseSuggestText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactSuggestText(value: string) {
+  return normaliseSuggestText(value).replace(/\s+/g, "");
+}
+
+function suggestInitials(value: string) {
+  return normaliseSuggestText(value)
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("");
+}
+
+function isSubsequence(query: string, target: string) {
+  let queryIndex = 0;
+  for (const char of target) {
+    if (char === query[queryIndex]) queryIndex += 1;
+    if (queryIndex === query.length) return true;
+  }
+  return false;
+}
+
+function suggestionMatchScore(item: SuggestionItem, query: string) {
+  const q = normaliseSuggestText(query);
+  if (!q) return 1;
+
+  const name = normaliseSuggestText(item.name);
+  const compactName = compactSuggestText(item.name);
+  const compactQuery = compactSuggestText(q);
+  const words = name.split(" ").filter(Boolean);
+
+  if (name === q) return 120;
+  if (name.startsWith(q)) return 110;
+  if (compactName.startsWith(compactQuery)) return 105;
+  if (words.some((word) => word.startsWith(q))) return 95;
+  if (suggestInitials(item.name).startsWith(compactQuery)) return 90;
+  if (name.includes(q)) return 75;
+  if (compactName.includes(compactQuery)) return 70;
+
+  const queryParts = q.split(" ").filter(Boolean);
+  if (queryParts.length > 1 && queryParts.every((part) => words.some((word) => word.startsWith(part) || word.includes(part)))) {
+    return 65;
+  }
+
+  if (compactQuery.length >= 3 && isSubsequence(compactQuery, compactName)) {
+    return 35;
+  }
+
+  return 0;
 }
 
 function SidebarCard({
@@ -246,6 +304,8 @@ export default function ResourcesPage() {
   const [suggestQuery, setSuggestQuery] = useState<string>("");
   const [highlightedSuggestIndex, setHighlightedSuggestIndex] = useState(0);
   const suggestRef = useRef<HTMLDivElement | null>(null);
+  const suggestMenuRef = useRef<HTMLDivElement | null>(null);
+  const [suggestMenuRect, setSuggestMenuRect] = useState<{ top: number; left: number; width: number } | null>(null);
 
   const [tagsOpenFor, setTagsOpenFor] = useState<string | null>(null);
   const [detailsOpenFor, setDetailsOpenFor] = useState<string | null>(null);
@@ -253,6 +313,10 @@ export default function ResourcesPage() {
   const lastSavedSnapshotRef = useRef<string>("");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "unsaved" | "error">("saved");
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const [editingActivityKey, setEditingActivityKey] = useState<string | null>(null);
+  const [editingActivityTitle, setEditingActivityTitle] = useState("");
+  const [editingActivityDate, setEditingActivityDate] = useState("");
+  const [editingActivityNotes, setEditingActivityNotes] = useState("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -424,16 +488,14 @@ export default function ResourcesPage() {
     });
 
     const ranked = deduped
-      .filter((item) => (!q ? true : item.name.toLowerCase().includes(q)))
+      .map((item) => ({ item, score: suggestionMatchScore(item, q) }))
+      .filter(({ score }) => (!q ? true : score > 0))
       .sort((a, b) => {
-        const aName = a.name.toLowerCase();
-        const bName = b.name.toLowerCase();
-        const aStarts = q ? aName.startsWith(q) : false;
-        const bStarts = q ? bName.startsWith(q) : false;
-        if (aStarts !== bStarts) return aStarts ? -1 : 1;
-        if (a.source !== b.source) return a.source === "rate_card" ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
+        if (a.score !== b.score) return b.score - a.score;
+        if (a.item.source !== b.item.source) return a.item.source === "rate_card" ? -1 : 1;
+        return a.item.name.localeCompare(b.item.name);
+      })
+      .map(({ item }) => item);
 
     return ranked.slice(0, q ? 12 : 10);
   }, [rateCards, suggestQuery, activeTab]);
@@ -451,9 +513,13 @@ export default function ResourcesPage() {
     function onDocClick(e: MouseEvent) {
       if (activeSuggestFor) {
         const el = suggestRef.current;
-        if (!(el && e.target instanceof Node && el.contains(e.target))) {
+        const menu = suggestMenuRef.current;
+        const clickedInsideInput = el && e.target instanceof Node && el.contains(e.target);
+        const clickedInsideMenu = menu && e.target instanceof Node && menu.contains(e.target);
+        if (!clickedInsideInput && !clickedInsideMenu) {
           setActiveSuggestFor(null);
           setSuggestQuery("");
+          setSuggestMenuRect(null);
         }
       }
 
@@ -468,6 +534,23 @@ export default function ResourcesPage() {
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [activeSuggestFor, tagsOpenFor]);
+
+  useEffect(() => {
+    if (!activeSuggestFor || typeof window === "undefined") return;
+
+    const update = () => {
+      const input = document.querySelector(`[data-resource-suggest-input="${activeSuggestFor}"]`) as HTMLElement | null;
+      updateSuggestMenuPosition(input);
+    };
+
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [activeSuggestFor]);
 
   async function load() {
     if (!eventId) return;
@@ -568,6 +651,20 @@ export default function ResourcesPage() {
     setActiveSuggestFor(null);
     setSuggestQuery("");
     setHighlightedSuggestIndex(0);
+    setSuggestMenuRect(null);
+  }
+
+  function updateSuggestMenuPosition(input: HTMLElement | null) {
+    if (!input) {
+      setSuggestMenuRect(null);
+      return;
+    }
+    const rect = input.getBoundingClientRect();
+    setSuggestMenuRect({
+      top: rect.bottom + 6,
+      left: rect.left,
+      width: rect.width,
+    });
   }
 
   function pickSuggestion(lineId: string, suggestion: SuggestionItem) {
@@ -756,6 +853,13 @@ export default function ResourcesPage() {
       });
       return next;
     });
+    if (activeTab !== "prelims") {
+      addLine(activeTab as Category, {
+        linked_event: nextActivity.title,
+        start_date: nextActivity.date,
+        notes: nextActivity.notes,
+      });
+    }
     setDraftActivityTitle("");
     setDraftTaskDate("");
     setDraftTaskDescription("");
@@ -767,6 +871,232 @@ export default function ResourcesPage() {
       start_date: activity.date || null,
       notes: activity.notes || null,
     });
+  }
+
+  function openEditActivity(bucket: ActivityBucket) {
+    setEditingActivityKey(bucket.key);
+    setEditingActivityTitle(bucket.title);
+    setEditingActivityDate(bucket.date || "");
+    setEditingActivityNotes(bucket.notes || "");
+  }
+
+  function closeEditActivity() {
+    setEditingActivityKey(null);
+    setEditingActivityTitle("");
+    setEditingActivityDate("");
+    setEditingActivityNotes("");
+  }
+
+  function rememberActivity(activity: ActivityRecord, previousKey?: string) {
+    const nextKey = getActivityKey(activity);
+    setActivities((prev) => {
+      const withoutPrevious = previousKey ? prev.filter((entry) => getActivityKey(entry) !== previousKey) : prev;
+      if (withoutPrevious.some((entry) => getActivityKey(entry) === nextKey)) return withoutPrevious;
+      return [...withoutPrevious, activity];
+    });
+  }
+
+  function makeDuplicateActivityTitle(bucket: ActivityBucket) {
+    const existingKeys = new Set([
+      ...activityBuckets.map((activity) => activity.key),
+      ...lines.map((line) => getActivityKey({
+        title: normaliseActivityValue(line.linked_event, "General activity") || "General activity",
+        date: line.start_date ?? null,
+      })),
+    ]);
+
+    for (let i = 1; i < 50; i += 1) {
+      const suffix = i === 1 ? "copy" : `copy ${i}`;
+      const title = `${bucket.title} ${suffix}`;
+      const key = getActivityKey({ title, date: bucket.date || null });
+      if (!existingKeys.has(key)) return title;
+    }
+
+    return `${bucket.title} copy ${Date.now()}`;
+  }
+
+  async function saveActivityEdit(bucket: ActivityBucket) {
+    if (!eventId || activeTab === "prelims") return;
+    const title = normaliseActivityValue(editingActivityTitle);
+    if (!title) return;
+
+    const nextActivity: ActivityRecord = {
+      id: bucket.id?.startsWith("derived_") ? `activity_${Math.random().toString(36).slice(2)}` : bucket.id,
+      title,
+      date: editingActivityDate || null,
+      notes: normaliseActivityValue(editingActivityNotes) || null,
+    };
+
+    setSaving("Updating activity...");
+    setSaveState("saving");
+    setError(null);
+
+    try {
+      const user = await getRequiredUser(supabase);
+      await getOwnedEventOrThrow(supabase, eventId, user.id);
+      const lineIds = bucket.lines.filter((line) => !line._localOnly).map((line) => line.id);
+
+      if (lineIds.length > 0) {
+        const up = await (supabase as any).from("event_resource_lines")
+          .update({
+            linked_event: nextActivity.title,
+            start_date: nextActivity.date,
+            notes: nextActivity.notes,
+          })
+          .eq("event_id", eventId)
+          .in("id", lineIds);
+        if (up.error) throw up.error;
+      }
+
+      await recalculateEventFinancialSummary(supabase, eventId, user.id);
+      rememberActivity(nextActivity, bucket.key);
+      setLines((prev) => {
+        const bucketIds = new Set(bucket.lines.map((line) => line.id));
+        const next = prev.map((line) => bucketIds.has(line.id) ? {
+          ...line,
+          linked_event: nextActivity.title,
+          start_date: nextActivity.date,
+          notes: nextActivity.notes,
+          _localOnly: line._localOnly,
+        } : line);
+        lastSavedSnapshotRef.current = serialiseLines(next);
+        setLastSavedAt(Date.now());
+        setSaveState("saved");
+        return next;
+      });
+      setHiddenActivityKeys((prev) => {
+        const next = { ...prev };
+        delete next[`${activeTab}:${bucket.key}`];
+        delete next[`${activeTab}:${getActivityKey(nextActivity)}`];
+        return next;
+      });
+      closeEditActivity();
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to update activity");
+      setSaveState("error");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function duplicateActivity(bucket: ActivityBucket) {
+    if (!eventId || activeTab === "prelims") return;
+    const duplicateTitle = makeDuplicateActivityTitle(bucket);
+    const nextActivity: ActivityRecord = {
+      id: `activity_${Math.random().toString(36).slice(2)}`,
+      title: duplicateTitle,
+      date: bucket.date || null,
+      notes: bucket.notes || null,
+    };
+
+    setSaving("Duplicating activity...");
+    setSaveState("saving");
+    setError(null);
+
+    try {
+      const user = await getRequiredUser(supabase);
+      await getOwnedEventOrThrow(supabase, eventId, user.id);
+      rememberActivity(nextActivity);
+
+      if (bucket.lines.length === 0) {
+        setSaveState("saved");
+        setLastSavedAt(Date.now());
+        return;
+      }
+
+      const payload = bucket.lines.map((line) => ({
+        event_id: eventId,
+        category: line.category,
+        item_name: line.item_name,
+        unit: line.unit,
+        hours: line.unit === "hour" ? Number(line.hours ?? 0) : null,
+        qty: Number(line.qty ?? 1),
+        rate: Number(line.rate ?? 0),
+        total: Number(line.total ?? 0),
+        notes: nextActivity.notes,
+        tags: line.tags ?? [],
+        start_date: nextActivity.date,
+        end_date: line.end_date,
+        linked_event: nextActivity.title,
+      }));
+
+      const ins = await (supabase as any).from("event_resource_lines")
+        .insert(payload)
+        .select("id,event_id,category,item_name,unit,hours,qty,rate,total,notes,tags,start_date,end_date,linked_event");
+      if (ins.error) throw ins.error;
+
+      await recalculateEventFinancialSummary(supabase, eventId, user.id);
+      const insertedLines = ((ins.data || []) as any[]).map((line) => ({
+        id: line.id,
+        event_id: line.event_id,
+        category: line.category,
+        item_name: line.item_name,
+        unit: line.unit,
+        hours: line.hours,
+        qty: Number(line.qty ?? 1),
+        rate: Number(line.rate ?? 0),
+        total: Number(line.total ?? 0),
+        notes: line.notes ?? null,
+        tags: Array.isArray(line.tags) ? line.tags : [],
+        start_date: line.start_date ?? null,
+        end_date: line.end_date ?? null,
+        linked_event: line.linked_event ?? null,
+      })) as Line[];
+
+      setLines((prev) => {
+        const next = [...prev, ...insertedLines];
+        lastSavedSnapshotRef.current = serialiseLines(next);
+        setLastSavedAt(Date.now());
+        setSaveState("saved");
+        return next;
+      });
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to duplicate activity");
+      setSaveState("error");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function deleteActivity(bucket: ActivityBucket) {
+    if (!eventId || activeTab === "prelims") return;
+    const ok = window.confirm(`Delete "${bucket.title}" from this ${labelTab(activeTab).toLowerCase()} tab? This will remove the resource lines inside it on this tab only.`);
+    if (!ok) return;
+
+    setSaving("Deleting activity...");
+    setSaveState("saving");
+    setError(null);
+
+    try {
+      const user = await getRequiredUser(supabase);
+      await getOwnedEventOrThrow(supabase, eventId, user.id);
+      const lineIds = bucket.lines.filter((line) => !line._localOnly).map((line) => line.id);
+
+      if (lineIds.length > 0) {
+        const del = await (supabase as any).from("event_resource_lines")
+          .delete()
+          .eq("event_id", eventId)
+          .in("id", lineIds);
+        if (del.error) throw del.error;
+      }
+
+      await recalculateEventFinancialSummary(supabase, eventId, user.id);
+      setHiddenActivityKeys((prev) => ({ ...prev, [`${activeTab}:${bucket.key}`]: true }));
+      setLines((prev) => {
+        const deleteIds = new Set(bucket.lines.map((line) => line.id));
+        const next = prev.filter((line) => !deleteIds.has(line.id));
+        lastSavedSnapshotRef.current = serialiseLines(next);
+        setLastSavedAt(Date.now());
+        setSaveState("saved");
+        return next;
+      });
+      closeEditActivity();
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to delete activity");
+      setSaveState("error");
+    } finally {
+      setSaving(null);
+    }
   }
 
   function hideActivityForCurrentTab(bucket: ActivityBucket) {
@@ -1062,16 +1392,26 @@ export default function ResourcesPage() {
                         </div>
 
                         <button
-                          onClick={addActivity}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            addActivity();
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter" && e.key !== " ") return;
+                            e.preventDefault();
+                            addActivity();
+                          }}
+                          disabled={!normaliseActivityValue(draftActivityTitle)}
                           style={{
                             border: "none",
-                            background: c.black,
+                            background: normaliseActivityValue(draftActivityTitle) ? c.black : c.lightGrey,
                             color: c.blackContrast,
                             padding: "10px 16px",
                             borderRadius: 12,
                             fontWeight: 600,
                             fontSize: 14,
-                            cursor: "pointer",
+                            cursor: normaliseActivityValue(draftActivityTitle) ? "pointer" : "not-allowed",
                             minHeight: 42,
                             minWidth: viewportWidth < 900 ? undefined : 160,
                             width: "100%",
@@ -1125,6 +1465,7 @@ export default function ResourcesPage() {
 
                     {visibleActivityBuckets.map((bucket) => {
                       const emptyBucket = bucket.lines.length === 0;
+                      const bucketHasOpenSuggestions = bucket.lines.some((line) => line.id === activeSuggestFor);
                       return (
                         <div
                           key={bucket.key}
@@ -1133,7 +1474,9 @@ export default function ResourcesPage() {
                             border: `1px solid ${c.border}`,
                             borderRadius: 16,
                             background: emptyBucket ? c.lightGrey : c.card,
-                            overflow: "hidden",
+                            overflow: bucketHasOpenSuggestions ? "visible" : "hidden",
+                            position: "relative",
+                            zIndex: bucketHasOpenSuggestions ? 20 : 1,
                           }}
                         >
                           <div
@@ -1157,6 +1500,40 @@ export default function ResourcesPage() {
                             </div>
 
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: viewportWidth < 900 ? "flex-start" : "flex-end", alignItems: "center" }}>
+                              <button
+                                type="button"
+                                onClick={() => openEditActivity(bucket)}
+                                style={{
+                                  border: `1px solid ${c.border}`,
+                                  background: c.input,
+                                  color: c.black,
+                                  padding: "8px 12px",
+                                  borderRadius: 10,
+                                  fontWeight: 600,
+                                  fontSize: 13,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                Edit activity
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => duplicateActivity(bucket)}
+                                style={{
+                                  border: `1px solid ${c.border}`,
+                                  background: c.input,
+                                  color: c.black,
+                                  padding: "8px 12px",
+                                  borderRadius: 10,
+                                  fontWeight: 600,
+                                  fontSize: 13,
+                                  cursor: "pointer",
+                                }}
+                              >
+                                Duplicate
+                              </button>
+
                               <button
                                 type="button"
                                 onClick={() => addLineForActivity(activeTab as Category, bucket)}
@@ -1194,6 +1571,110 @@ export default function ResourcesPage() {
                               ) : null}
                             </div>
                           </div>
+
+                          {editingActivityKey === bucket.key ? (
+                            <div
+                              style={{
+                                padding: 14,
+                                borderBottom: `1px solid ${c.border}`,
+                                background: c.card,
+                                display: "grid",
+                                gap: 12,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: viewportWidth < 900 ? "1fr" : "minmax(0, 1.2fr) 170px minmax(0, 1.4fr)",
+                                  gap: 10,
+                                  alignItems: "end",
+                                }}
+                              >
+                                <label style={{ display: "grid", gap: 6 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: c.sub }}>Activity title</span>
+                                  <input
+                                    value={editingActivityTitle}
+                                    onChange={(e) => setEditingActivityTitle(e.target.value)}
+                                    style={{ width: "100%", border: `1px solid ${c.border}`, borderRadius: 12, padding: "10px 12px", fontSize: 14, background: c.input, color: c.black }}
+                                  />
+                                </label>
+
+                                <label style={{ display: "grid", gap: 6 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: c.sub }}>Date</span>
+                                  <input
+                                    type="date"
+                                    value={editingActivityDate}
+                                    onChange={(e) => setEditingActivityDate(e.target.value)}
+                                    style={{ width: "100%", border: `1px solid ${c.border}`, borderRadius: 12, padding: "10px 12px", fontSize: 14, background: c.input, color: c.black }}
+                                  />
+                                </label>
+
+                                <label style={{ display: "grid", gap: 6 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: c.sub }}>Notes</span>
+                                  <input
+                                    value={editingActivityNotes}
+                                    onChange={(e) => setEditingActivityNotes(e.target.value)}
+                                    style={{ width: "100%", border: `1px solid ${c.border}`, borderRadius: 12, padding: "10px 12px", fontSize: 14, background: c.input, color: c.black }}
+                                  />
+                                </label>
+                              </div>
+
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "space-between", alignItems: "center" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteActivity(bucket)}
+                                  style={{
+                                    border: `1px solid ${c.redBorder}`,
+                                    background: c.redBg,
+                                    color: c.redText,
+                                    padding: "9px 12px",
+                                    borderRadius: 10,
+                                    fontWeight: 700,
+                                    fontSize: 13,
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  Delete activity
+                                </button>
+
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                  <button
+                                    type="button"
+                                    onClick={closeEditActivity}
+                                    style={{
+                                      border: `1px solid ${c.border}`,
+                                      background: c.input,
+                                      color: c.black,
+                                      padding: "9px 12px",
+                                      borderRadius: 10,
+                                      fontWeight: 700,
+                                      fontSize: 13,
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => saveActivityEdit(bucket)}
+                                    disabled={!normaliseActivityValue(editingActivityTitle)}
+                                    style={{
+                                      border: "none",
+                                      background: normaliseActivityValue(editingActivityTitle) ? c.black : c.lightGrey,
+                                      color: c.blackContrast,
+                                      padding: "9px 12px",
+                                      borderRadius: 10,
+                                      fontWeight: 700,
+                                      fontSize: 13,
+                                      cursor: normaliseActivityValue(editingActivityTitle) ? "pointer" : "not-allowed",
+                                    }}
+                                  >
+                                    Save activity
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
 
                           {emptyBucket ? (
                             <div style={{ padding: 14, color: c.sub, fontWeight: 600 }}>
@@ -1235,6 +1716,7 @@ export default function ResourcesPage() {
                                       padding: "12px",
                                       borderBottom: `1px solid ${c.border}`,
                                       position: "relative",
+                                      zIndex: isSuggesting ? 30 : 1,
                                     }}
                                   >
                                     <div
@@ -1247,14 +1729,19 @@ export default function ResourcesPage() {
                                     >
                             <div ref={isSuggesting ? suggestRef : null} style={{ position: "relative" }}>
                               <input
+                                data-resource-suggest-input={l.id}
                                 value={l.item_name}
                                 placeholder="Start typing…"
-                                onFocus={() => openSuggest(l.id, l.item_name)}
+                                onFocus={(e) => {
+                                  openSuggest(l.id, l.item_name);
+                                  updateSuggestMenuPosition(e.currentTarget);
+                                }}
                                 onChange={(e) => {
                                   updateLine(l.id, { item_name: e.target.value });
                                   setSuggestQuery(e.target.value);
                                   setActiveSuggestFor(l.id);
                                   setHighlightedSuggestIndex(0);
+                                  updateSuggestMenuPosition(e.currentTarget);
                                 }}
                                 onKeyDown={(e) => {
                                   if (!isSuggesting || filteredSuggestions.length === 0) return;
@@ -1325,21 +1812,22 @@ export default function ResourcesPage() {
                                 );
                               })()}
 
-                              {isSuggesting ? (
+                              {isSuggesting && suggestMenuRect ? (
                                 <div
+                                  ref={suggestMenuRef}
                                   style={{
-                                    position: "absolute",
-                                    zIndex: 50,
-                                    top: 46,
-                                    left: 0,
-                                    right: 0,
+                                    position: "fixed",
+                                    zIndex: 9999,
+                                    top: suggestMenuRect.top,
+                                    left: suggestMenuRect.left,
+                                    width: suggestMenuRect.width,
                                     background: c.input,
                                     border: `1px solid ${c.border}`,
                                     borderRadius: 12,
                                     overflow: "hidden",
-                                    maxHeight: 320,
+                                    maxHeight: Math.min(320, Math.max(180, window.innerHeight - suggestMenuRect.top - 18)),
                                     overflowY: "auto",
-                                    boxShadow: "0 12px 30px rgba(0,0,0,0.08)",
+                                    boxShadow: "0 18px 42px rgba(15,23,42,0.16)",
                                   }}
                                 >
                                   {filteredSuggestions.length === 0 ? (

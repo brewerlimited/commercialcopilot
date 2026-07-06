@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 type FeedbackType = "Bug" | "Confusing" | "Feature idea" | "General feedback";
@@ -25,6 +26,7 @@ const c = {
 };
 
 export default function FeedbackWidget() {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [feedbackType, setFeedbackType] = useState<FeedbackType>("Bug");
   const [message, setMessage] = useState("");
@@ -33,6 +35,8 @@ export default function FeedbackWidget() {
   const [error, setError] = useState<string | null>(null);
 
   const trimmedMessage = useMemo(() => message.trim(), [message]);
+
+  if (!pathname?.startsWith("/app")) return null;
 
   function resetForm() {
     setFeedbackType("Bug");

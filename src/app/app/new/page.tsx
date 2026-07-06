@@ -383,6 +383,20 @@ export default function NewEvent() {
         return;
       }
 
+      if (fromEwnId) {
+        const latestEwn = await (supabase as any).from("ewns")
+          .select("converted_event_id")
+          .eq("id", fromEwnId)
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (latestEwn.error) throw latestEwn.error;
+        const existingConvertedEventId = String(latestEwn.data?.converted_event_id || "");
+        if (existingConvertedEventId) {
+          router.push(`/app/event/${existingConvertedEventId}`);
+          return;
+        }
+      }
+
       const cleanProjectName = projectName.trim();
       const cleanMainContractor = mainContractor.trim();
       let linkedProjectId = projectId;
@@ -460,6 +474,15 @@ export default function NewEvent() {
 
       const eventId = (insertRes.data as any)?.id as string;
 
+      if (fromEwnId) {
+        const convertedAt = new Date().toISOString();
+        const conversionUpdate = await (supabase as any).from("ewns")
+          .update({ status: "converted", converted_event_id: eventId, converted_at: convertedAt })
+          .eq("id", fromEwnId)
+          .eq("user_id", user.id);
+        if (conversionUpdate.error) throw conversionUpdate.error;
+      }
+
       if (contractSource === "upload_contract" && files.length > 0) {
         for (const file of files) {
           const safeName = file.name.replace(/[^\w.\- ]+/g, "_");
@@ -509,7 +532,7 @@ export default function NewEvent() {
         const differenceFromPlan = buildEwnDifferenceText(conversionFacts);
 
         if (happenedSummary || ewnFacts.impact || ewnFacts.requiredAction || ewnFacts.evidence) {
-          await (supabase as any).from("event_basis").upsert(
+          const basisCarryOver = await (supabase as any).from("event_basis").upsert(
             {
               event_id: eventId,
               happened_summary: happenedSummary,
@@ -523,6 +546,7 @@ export default function NewEvent() {
             },
             { onConflict: "event_id" }
           );
+          if (basisCarryOver.error) throw basisCarryOver.error;
         }
 
         const actionInsert = await (supabase as any).from("event_actions")
@@ -542,10 +566,6 @@ export default function NewEvent() {
           console.warn("EWN conversion action log skipped", actionInsert.error.message);
         }
 
-        await (supabase as any).from("ewns")
-          .update({ status: "converted", converted_event_id: eventId, converted_at: new Date().toISOString() })
-          .eq("id", fromEwnId)
-          .eq("user_id", user.id);
         try {
           const raw = localStorage.getItem("cc.ewns");
           const parsed = raw ? JSON.parse(raw) : [];

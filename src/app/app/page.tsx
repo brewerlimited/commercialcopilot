@@ -368,20 +368,13 @@ function nextTrackingState(next: TrackingUpdate) {
   return patch;
 }
 
-function paymentStatusForDatabase(status?: string | null) {
-  // Older Supabase schemas still allow "applied" but reject the newer
-  // "submitted_for_payment" value. The UI normalises "applied" back to
-  // "Submitted for payment", so writes stay compatible without changing display.
-  return status === "submitted_for_payment" ? "applied" : status;
+function trackingPatchForDatabase(patch: Partial<EventRow>) {
+  return { ...patch };
 }
 
-function trackingPatchForDatabase(patch: Partial<EventRow>) {
-  return {
-    ...patch,
-    ...(Object.prototype.hasOwnProperty.call(patch, "payment_status")
-      ? { payment_status: paymentStatusForDatabase(patch.payment_status) }
-      : {}),
-  };
+function legacyPaymentStatusPatch(patch: Partial<EventRow>) {
+  if (patch.payment_status !== "submitted_for_payment") return null;
+  return { ...patch, payment_status: "applied" };
 }
 
 const OPTIONAL_RECOVERY_TRACKING_COLUMNS = [
@@ -442,8 +435,10 @@ function hasCoreTrackingChange(next: TrackingUpdate) {
 
 async function updateEventTrackingWithFallback(supabase: any, eventId: string, userId: string, patch: Partial<EventRow>) {
   const databasePatch = compactTrackingPatch(trackingPatchForDatabase(patch));
+  const legacyPatch = legacyPaymentStatusPatch(databasePatch);
   const attempts = [
     databasePatch,
+    ...(legacyPatch ? [legacyPatch] : []),
     removeColumns(databasePatch, OPTIONAL_RECOVERY_TRACKING_COLUMNS),
     removeColumns(databasePatch, [...OPTIONAL_RECOVERY_TRACKING_COLUMNS, ...ACTION_TRACKING_COLUMNS]),
     Object.prototype.hasOwnProperty.call(databasePatch, "status")
@@ -791,6 +786,8 @@ function AppHomeContent() {
   const [projectMoveValues, setProjectMoveValues] = useState<Record<string, string>>({});
   const [projectMoveSavingId, setProjectMoveSavingId] = useState<string | null>(null);
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
+  const [deleteConfirmEventId, setDeleteConfirmEventId] = useState<string | null>(null);
+  const [deleteConfirmValue, setDeleteConfirmValue] = useState("");
   const [focusProgress, setFocusProgress] = useState<FocusProgress | null>(null);
   const [focusLoading, setFocusLoading] = useState(false);
 
@@ -1326,9 +1323,7 @@ function AppHomeContent() {
   }
 
   async function deleteRegisterEvent(event: EventRow) {
-    const label = `${displayEventReference(event)} - ${event.title || "Untitled CE"}`;
-    const typedConfirmation = window.prompt(`Delete ${label} and all linked CE/VO records?\n\nThis cannot be undone. Type "delete" to confirm.`);
-    if (typedConfirmation?.trim().toLowerCase() !== "delete") return;
+    if (deleteConfirmValue.trim().toLowerCase() !== "delete") return;
 
     const previousEvents = events;
 
@@ -1354,11 +1349,26 @@ function AppHomeContent() {
         console.warn("Could not load CE evidence files for deletion", fileRows.error);
       }
 
+      const contractFileRows = await (supabase as any).from("event_contract_files").select("file_path").eq("event_id", event.id);
+      const contractFilePaths = Array.isArray(contractFileRows.data)
+        ? contractFileRows.data
+            .map((file: { file_path?: string | null }) => file.file_path)
+            .filter((path: string | null | undefined): path is string => Boolean(path))
+        : [];
+      if (contractFilePaths.length > 0) {
+        const contractStorageRemove = await supabase.storage.from("contract-files").remove(contractFilePaths);
+        if (contractStorageRemove.error) console.warn("Could not remove CE contract files from storage", contractStorageRemove.error);
+      } else if (contractFileRows.error && !isOptionalSchemaError(contractFileRows.error)) {
+        console.warn("Could not load CE contract files for deletion", contractFileRows.error);
+      }
+
+      await optionalDeleteQuery((supabase as any).from("event_file_share_links").delete().eq("event_id", event.id), "evidence share links");
       await optionalDeleteQuery((supabase as any).from("event_actions").delete().eq("event_id", event.id), "action history");
       await optionalDeleteQuery((supabase as any).from("event_rebuttals").delete().eq("event_id", event.id), "commercial pushback");
       await optionalDeleteQuery((supabase as any).from("event_ai_drafts").delete().eq("event_id", event.id), "drafts");
       await optionalDeleteQuery((supabase as any).from("event_packs").delete().eq("event_id", event.id), "packs");
       await optionalDeleteQuery((supabase as any).from("event_files").delete().eq("event_id", event.id), "files");
+      await optionalDeleteQuery((supabase as any).from("event_contract_files").delete().eq("event_id", event.id), "contract files");
       await optionalDeleteQuery((supabase as any).from("event_review_settings").delete().eq("event_id", event.id), "review settings");
       await optionalDeleteQuery((supabase as any).from("event_valuation_settings").delete().eq("event_id", event.id), "valuation settings");
       await optionalDeleteQuery((supabase as any).from("event_prelim_lines").delete().eq("event_id", event.id), "prelims");
@@ -1367,6 +1377,8 @@ function AppHomeContent() {
 
       const deleteEvent = await (supabase as any).from("events").delete().eq("id", event.id).eq("user_id", user.id);
       if (deleteEvent.error) throw deleteEvent.error;
+      setDeleteConfirmEventId(null);
+      setDeleteConfirmValue("");
     } catch (err) {
       console.warn("Failed to delete CE/VO", err);
       setEvents(previousEvents);
@@ -1893,23 +1905,65 @@ function AppHomeContent() {
                               flexWrap: "wrap",
                             }}
                           >
-                            <button
-                              onClick={() => void deleteRegisterEvent(row.event)}
-                              disabled={deletingEventId === row.event.id}
-                              style={{
-                                height: 40,
-                                border: `1px solid ${c.redBd}`,
-                                background: c.redBg,
-                                color: c.redTx,
-                                borderRadius: 12,
-                                padding: "0 14px",
-                                fontWeight: 650,
-                                cursor: deletingEventId === row.event.id ? "not-allowed" : "pointer",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {deletingEventId === row.event.id ? "Deleting..." : "Delete CE/VO"}
-                            </button>
+                            {deleteConfirmEventId === row.event.id ? (
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                                <span style={{ fontSize: 12, color: c.sub }}>Type delete to confirm</span>
+                                <input
+                                  value={deleteConfirmValue}
+                                  onChange={(e) => setDeleteConfirmValue(e.target.value)}
+                                  placeholder="delete"
+                                  autoFocus
+                                  style={{ height: 40, width: 110, border: `1px solid ${c.redBd}`, background: c.input, color: c.text, borderRadius: 12, padding: "0 10px", fontSize: 13 }}
+                                />
+                                <button
+                                  onClick={() => void deleteRegisterEvent(row.event)}
+                                  disabled={deletingEventId === row.event.id || deleteConfirmValue.trim().toLowerCase() !== "delete"}
+                                  style={{
+                                    height: 40,
+                                    border: `1px solid ${c.redBd}`,
+                                    background: deleteConfirmValue.trim().toLowerCase() === "delete" ? c.redBg : c.soft,
+                                    color: c.redTx,
+                                    borderRadius: 12,
+                                    padding: "0 14px",
+                                    fontWeight: 650,
+                                    cursor: deletingEventId === row.event.id || deleteConfirmValue.trim().toLowerCase() !== "delete" ? "not-allowed" : "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {deletingEventId === row.event.id ? "Deleting..." : "Confirm delete"}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setDeleteConfirmEventId(null);
+                                    setDeleteConfirmValue("");
+                                  }}
+                                  style={{ height: 40, border: `1px solid ${c.border}`, background: c.input, color: c.text, borderRadius: 12, padding: "0 12px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setDeleteConfirmEventId(row.event.id);
+                                  setDeleteConfirmValue("");
+                                }}
+                                disabled={deletingEventId === row.event.id}
+                                style={{
+                                  height: 40,
+                                  border: `1px solid ${c.redBd}`,
+                                  background: c.redBg,
+                                  color: c.redTx,
+                                  borderRadius: 12,
+                                  padding: "0 14px",
+                                  fontWeight: 650,
+                                  cursor: deletingEventId === row.event.id ? "not-allowed" : "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {deletingEventId === row.event.id ? "Deleting..." : "Delete CE/VO"}
+                              </button>
+                            )}
                             <button onClick={() => startRename(row.event)} style={{ height: 40, border: `1px solid ${c.border}`, background: c.input, color: c.text, borderRadius: 12, padding: "0 14px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}>Rename</button>
                             <Link href={primaryAction.href} style={{ textDecoration: "none", display: "inline-flex" }}>
                               <button style={{ height: 40, border: `1px solid ${c.black}`, background: c.black, color: c.blackContrast, borderRadius: 12, padding: "0 16px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}>{primaryAction.label}</button>

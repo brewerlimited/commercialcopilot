@@ -13,6 +13,7 @@ import { displayEventReference } from "@/lib/eventReference";
 import { getDraftTemplateForContractType } from "@/lib/draftTemplates";
 import { recalculateEventFinancialSummary } from "@/lib/financialSummary";
 import { getCommercialStatusLabel, normaliseCommercialStatus } from "@/lib/commercialControl";
+import { isSubscriptionActive, type BillingStatus } from "@/lib/billing";
 
 type Unit = "day" | "week";
 
@@ -528,6 +529,7 @@ function ReviewPageContent() {
   const [billingGateLoaded, setBillingGateLoaded] = useState(false);
   const [creditsRemaining, setCreditsRemaining] = useState(0);
   const [isAdminUnlimited, setIsAdminUnlimited] = useState(false);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<BillingStatus>("inactive");
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [showReadinessDetails, setShowReadinessDetails] = useState(false);
   const [generatedCommercialPushback, setGeneratedCommercialPushback] = useState<Array<{ heading: string; note: string }>>([]);
@@ -830,10 +832,16 @@ function ReviewPageContent() {
 
   const effectiveForceGenerateMode = isAdminUnlimited && forceGenerateMode;
   const packReady = hasGeneratedPack && !effectiveForceGenerateMode;
+  const billingGatePending = !billingGateLoaded && !packReady;
+  const subscriptionLocked = billingGateLoaded && !isAdminUnlimited && !isSubscriptionActive(subscriptionStatus) && !packReady;
   const generationCreditLocked = billingGateLoaded && !isAdminUnlimited && creditsRemaining <= 0 && !packReady;
-  const generateDisabled = !packReady && (blockers > 0 || isGenerating || generationCreditLocked);
+  const generateDisabled = !packReady && (blockers > 0 || isGenerating || billingGatePending || subscriptionLocked || generationCreditLocked);
   const generateButtonLabel = effectiveForceGenerateMode ? "Produce recovery pack" : isGenerating
     ? "Generating…"
+    : billingGatePending
+    ? "Checking billing…"
+    : subscriptionLocked
+    ? "Subscription required"
     : generationCreditLocked
     ? "No credits remaining"
     : packReady
@@ -1131,6 +1139,7 @@ function ReviewPageContent() {
         const loadedIsAdminUnlimited = Boolean(creditGateData?.isAdminUnlimited);
         setIsAdminUnlimited(loadedIsAdminUnlimited);
         setCreditsRemaining(clampNum(creditGateData?.creditsRemaining, 0));
+        setSubscriptionStatus((creditGateData?.subscriptionStatus as BillingStatus) || "inactive");
 
         const existingPackId = await getExistingPackId(supabase, user.id);
         const existingPackAvailable = Boolean(existingPackId) && !(loadedIsAdminUnlimited && getForceGenerateMode());
@@ -1591,6 +1600,21 @@ function ReviewPageContent() {
       return;
     }
 
+    if (billingGatePending) {
+      setSaveErr("Checking billing access. Try again in a moment.");
+      return;
+    }
+
+    if (subscriptionLocked) {
+      setSaveErr("Your subscription is not active. Open Billing to upgrade before generating a recovery pack.");
+      return;
+    }
+
+    if (generationCreditLocked) {
+      setSaveErr("No credits remaining. Open Billing to upgrade or buy additional credits before generating another pack.");
+      return;
+    }
+
     setIsGenerating(true);
     startGenerationProgress();
     setSaveErr(null);
@@ -1698,7 +1722,7 @@ function ReviewPageContent() {
           ? [
               {
                 heading: "Pushback & defence generated",
-                note: "The AI did not identify a specific challenge theme from the generated recovery pack output.",
+                note: "No specific challenge theme was identified from the generated recovery pack output.",
               },
             ]
           : generatedPushback;
@@ -2054,7 +2078,7 @@ function ReviewPageContent() {
                       Pushback has not been generated for this view
                     </div>
                     <div style={{ marginTop: 6, fontSize: 12.5, lineHeight: 1.55, color: c.sub }}>
-                      Select “Pushback & Defence” in Pack contents, then produce the recovery pack to show the AI-generated defence points here.
+                      Select “Pushback & Defence” in Pack contents, then produce the recovery pack to show the generated defence points here.
                     </div>
                   </div>
                 ) : (
@@ -2077,7 +2101,36 @@ function ReviewPageContent() {
               </div>
             </Card>
 
-            {showRebuttalPanel ? (
+            {!showRebuttalPanel ? (
+              <Card
+                title="Rebuttal generator"
+                hint="Use this if the CE is rejected, reduced or assessed short. The full rebuttal is generated from the completed pack and the contractor response."
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 13, lineHeight: 1.55, color: c.sub }}>
+                    Normally opens automatically once the CE status is Rejected, but you can open it now if you are preparing for a likely challenge or short assessment.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowRebuttalPanel(true)}
+                    style={{
+                      height: 40,
+                      padding: "0 14px",
+                      borderRadius: 12,
+                      border: `1px solid ${c.black}`,
+                      background: c.black,
+                      color: c.blackContrast,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Open rebuttal generator
+                  </button>
+                </div>
+              </Card>
+            ) : (
               <Card
                 title="Rebuttal generator"
                 hint="Use this after a CE is rejected or reduced. Paste the contractor response and generate a measured commercial reply. This stays internal until you copy or issue it."
@@ -2224,7 +2277,7 @@ function ReviewPageContent() {
                   )}
                 </div>
               </Card>
-            ) : null}
+            )}
 
             <Card
               title="Recovery summary"
@@ -2293,7 +2346,7 @@ function ReviewPageContent() {
 
             <Card
               title="Pack contents"
-              hint="Choose the sections needed to support entitlement, valuation and payment. The AI-generated JSON narrative populates the Basis of Change and Time Impact tabs when the pack is generated."
+              hint="Choose the sections needed to support entitlement, valuation and payment. The generated recovery narrative populates the Basis of Change and Time Impact tabs when the pack is produced."
             >
               {[
                 {
@@ -2696,7 +2749,11 @@ function ReviewPageContent() {
                   {generateButtonLabel}
                 </button>
 
-                {generationCreditLocked ? (
+                {subscriptionLocked ? (
+                  <div style={{ fontSize: 12, color: c.redText, background: c.redBg, border: `1px solid ${c.redBorder}`, borderRadius: 12, padding: 10 }}>
+                    Your subscription is not active. Open Billing to upgrade before generating a recovery pack.
+                  </div>
+                ) : generationCreditLocked ? (
                   <div style={{ fontSize: 12, color: c.redText, background: c.redBg, border: `1px solid ${c.redBorder}`, borderRadius: 12, padding: 10 }}>
                     You have no credits remaining. Open Billing to upgrade or buy additional credits before generating another pack.
                   </div>

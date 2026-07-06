@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase/client";
+import { CONTRACT_TYPE_OPTIONS, getContractLabel } from "@/lib/contracts";
 
 const c = {
   card: "var(--surface)",
@@ -46,6 +47,13 @@ type LocalEwnRow = {
   generated_output: GeneratedEwn;
   status: "open";
   created_at: string;
+};
+
+type ProjectOption = {
+  id: string;
+  project_name: string;
+  main_contractor: string | null;
+  contract_type: string | null;
 };
 
 function Label({ children }: { children: React.ReactNode }) {
@@ -174,6 +182,8 @@ export default function NewEwnPage() {
   const [projectName, setProjectName] = useState("");
   const [mainContractor, setMainContractor] = useState("");
   const [contractType, setContractType] = useState("NEC4");
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
   const [whatHappened, setWhatHappened] = useState("");
   const [when, setWhen] = useState("");
   const [where, setWhere] = useState("");
@@ -198,6 +208,63 @@ export default function NewEwnPage() {
     if (contractor) setMainContractor((prev) => prev || contractor);
     if (contract) setContractType((prev) => prev || contract);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProjects() {
+      try {
+        const supabase = supabaseBrowser();
+        const { data } = await supabase.auth.getSession();
+        const userId = data.session?.user?.id;
+        if (!userId) {
+          if (!cancelled) setProjects([]);
+          return;
+        }
+
+        const res = await (supabase as any).from("projects")
+          .select("id,project_name,main_contractor,contract_type")
+          .eq("user_id", userId)
+          .order("updated_at", { ascending: false });
+
+        if (res.error) throw res.error;
+        if (!cancelled) setProjects((res.data ?? []) as ProjectOption[]);
+      } catch {
+        if (!cancelled) setProjects([]);
+      } finally {
+        if (!cancelled) setProjectsLoading(false);
+      }
+    }
+
+    loadProjects();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function selectProject(nextProjectId: string) {
+    if (!nextProjectId) {
+      setProjectId(null);
+      return;
+    }
+
+    const project = projects.find((item) => item.id === nextProjectId);
+    if (!project) return;
+
+    setProjectId(project.id);
+    setProjectName(project.project_name);
+    setMainContractor(project.main_contractor ?? "");
+    if (project.contract_type) setContractType(project.contract_type);
+  }
+
+  function updateProjectName(value: string) {
+    setProjectName(value);
+    setProjectId(null);
+  }
+
+  function updateMainContractor(value: string) {
+    setMainContractor(value);
+    setProjectId(null);
+  }
 
   async function generateAndSave() {
     setErr(null);
@@ -235,6 +302,7 @@ export default function NewEwnPage() {
 
         setGenerated(payload.generated_output as GeneratedEwn);
         setSavedId(payload.id as string);
+        if (payload.project_id) setProjectId(payload.project_id as string);
         return;
       }
 
@@ -307,20 +375,41 @@ export default function NewEwnPage() {
             <TextInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Existing services clash at Newlay" />
           </label>
 
+          <label style={{ display: "grid", gap: 6 }}>
+            <Label>Use existing project</Label>
+            <SelectInput value={projectId ?? ""} onChange={(e) => selectProject(e.target.value)} disabled={projectsLoading || projects.length === 0}>
+              <option value="">{projectsLoading ? "Loading projects..." : projects.length === 0 ? "No saved projects yet - type a new one below" : "Type a new project or choose existing..."}</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.project_name}{project.main_contractor ? ` - ${project.main_contractor}` : ""}
+                </option>
+              ))}
+            </SelectInput>
+            <span style={{ color: c.sub, fontSize: 12, fontWeight: 650 }}>
+              Pick a saved project, or type a new project below. New projects are added to Projects when the EWN is generated.
+            </span>
+          </label>
+
           <div style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             <label style={{ display: "grid", gap: 6 }}>
               <Label>Project / job</Label>
-              <TextInput value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="e.g. Calder Road" />
+              <TextInput value={projectName} onChange={(e) => updateProjectName(e.target.value)} placeholder="e.g. Calder Road" />
             </label>
             <label style={{ display: "grid", gap: 6 }}>
               <Label>Main contractor</Label>
-              <TextInput value={mainContractor} onChange={(e) => setMainContractor(e.target.value)} placeholder="e.g. BAM Nuttall" />
+              <TextInput value={mainContractor} onChange={(e) => updateMainContractor(e.target.value)} placeholder="e.g. BAM Nuttall" />
             </label>
           </div>
 
           <label style={{ display: "grid", gap: 6 }}>
             <Label>Contract type</Label>
             <SelectInput value={contractType} onChange={(e) => setContractType(e.target.value)}>
+              {contractType && !CONTRACT_TYPE_OPTIONS.some((option) => option.value === contractType) && !["NEC4", "NEC3", "JCT", "Bespoke"].includes(contractType) ? (
+                <option value={contractType}>{getContractLabel(contractType)}</option>
+              ) : null}
+              {CONTRACT_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
               <option value="NEC4">NEC4</option>
               <option value="NEC3">NEC3</option>
               <option value="JCT">JCT</option>

@@ -1091,7 +1091,7 @@ export default function EventBasisPage() {
 
             <Card
               title="Event date & notice risk"
-              hint="Used by the commercial dashboard to calculate time-bar risk from the contract notice period. AI can later extract this rule from uploaded bespoke contracts, but the calculated rule is stored here for transparency."
+              hint="Used by the commercial dashboard to calculate time-bar risk from the contract notice period. Bespoke contract review can later extract this rule from uploaded contracts, but the calculated rule is stored here for transparency."
             >
               <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(180px, 0.5fr)", gap: 14, alignItems: "end" }}>
                 <label style={{ display: "grid", gap: 6 }}>

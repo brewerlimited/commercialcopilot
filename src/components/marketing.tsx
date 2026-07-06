@@ -2,15 +2,15 @@ import Link from "next/link";
 import type { ReactNode, CSSProperties } from "react";
 
 export const m = {
-  bg: "var(--background)",
-  card: "var(--surface)",
-  border: "var(--border)",
-  text: "var(--foreground)",
-  sub: "var(--text-muted)",
-  muted: "var(--text-soft)",
-  soft: "var(--surface-soft)",
-  black: "var(--text-strong)",
-  contrast: "var(--accent-contrast)",
+  bg: "#ffffff",
+  card: "#ffffff",
+  border: "rgba(15, 23, 42, 0.09)",
+  text: "#0f172a",
+  sub: "#596579",
+  muted: "#64748b",
+  soft: "#f6f8fb",
+  black: "#0f172a",
+  contrast: "#ffffff",
 };
 
 const shellWidth = 1240;
@@ -31,7 +31,7 @@ const baseButton: CSSProperties = {
 
 export function SiteShell({ children }: { children: ReactNode }) {
   return (
-    <main style={{ minHeight: "100vh", background: m.bg, color: m.text }}>
+    <main className="marketing-shell" style={{ minHeight: "100vh", background: "#ffffff", color: m.text }}>
       <TopBar />
       {children}
       <SiteFooter />
@@ -53,9 +53,9 @@ export function TopBar() {
         position: "sticky",
         top: 0,
         zIndex: 20,
-        background: "rgba(255, 255, 255, 0.86)",
-        backdropFilter: "blur(10px)",
+        background: "#ffffff",
         borderBottom: `1px solid ${m.border}`,
+        boxShadow: "0 1px 0 rgba(15, 23, 42, 0.02)",
       }}
     >
       <div
@@ -142,7 +142,7 @@ export function SiteFooter() {
   };
 
   return (
-    <footer style={{ borderTop: `1px solid ${m.border}`, marginTop: 80 }}>
+    <footer style={{ borderTop: `1px solid ${m.border}`, marginTop: 80, background: "#ffffff" }}>
       <div
         style={{
           maxWidth: shellWidth,

@@ -46,6 +46,16 @@ export async function POST(req: NextRequest) {
     if (ewnId && !isUuid(ewnId)) return NextResponse.json({ error: "Invalid EWN id." }, { status: 400 });
 
     const admin = supabaseAdmin() as any;
+    if (ewnId) {
+      const existingEwn = await (admin as any).from("ewns")
+        .select("id")
+        .eq("id", ewnId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (existingEwn.error) throw existingEwn.error;
+      if (!existingEwn.data) return NextResponse.json({ error: "EWN not found." }, { status: 404 });
+    }
+
     const profileRes = await (admin as any).from("profiles")
       .select("id,is_admin_unlimited,ewn_credits_remaining,ewn_credits_limit")
       .eq("id", user.id)
@@ -142,6 +152,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       id: (upsertRes.data as { id: string } | null)?.id ?? row.id,
+      project_id: linkedProjectId,
       generated_output: output,
     });
   } catch (error: unknown) {

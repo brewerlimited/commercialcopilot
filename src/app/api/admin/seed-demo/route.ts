@@ -371,12 +371,13 @@ function money(v: number) {
   return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }).format(v || 0);
 }
 
-function seedPaymentStatusForInsert(status: string) {
-  // Some live tester databases still have the older events_payment_status_allowed
-  // constraint that accepts "applied" but not the newer "submitted_for_payment".
-  // The app normalises "applied" back to "submitted_for_payment" for display,
-  // so this keeps demo seeding compatible without changing the user's database.
-  return status === "submitted_for_payment" ? "applied" : status;
+function isPaymentStatusConstraintError(error: any) {
+  const combined = `${String(error?.message || "")} ${String(error?.details || "")} ${String(error?.code || "")}`.toLowerCase();
+  return combined.includes("events_payment_status_allowed") || (combined.includes("check constraint") && combined.includes("payment_status"));
+}
+
+function demoProjectKey(projectName: string, mainContractor: string | null | undefined) {
+  return `${projectName.trim().toLowerCase()}__${String(mainContractor || "").trim().toLowerCase()}`;
 }
 
 function lineTotal(r: DemoResource) {
@@ -504,6 +505,7 @@ const EVENTS: DemoEvent[] = [
       { category: "labour", item_name: "Banksman", unit: "hour", hours: 9, qty: 1, rate: 37, notes: "Entrance traffic and pedestrian control while drainage was corrected.", tags: ["restricted_access"], start_date: "2026-03-11", end_date: "2026-03-12", linked_event: "North Gate access" },
       { category: "plant", item_name: "13t excavator", unit: "hour", hours: 9, qty: 1, rate: 78, notes: "Re-excavation, lift and relay support, bedding trim and local handling of arisings.", tags: ["additional_handling"], start_date: "2026-03-11", end_date: "2026-03-12", linked_event: "North Gate drainage" },
       { category: "plant", item_name: "6t dumper", unit: "hour", hours: 6, qty: 1, rate: 38, notes: "Move bedding and arisings around restricted entrance area.", tags: ["additional_handling"], start_date: "2026-03-12", end_date: "2026-03-12", linked_event: "North Gate drainage" },
+      { category: "plant", item_name: "Traffic management set", unit: "day", hours: null, qty: 2, rate: 95, notes: "Cones, barriers and temporary access control kept in place while the entrance stayed live during drainage correction.", tags: ["restricted_access"], start_date: "2026-03-11", end_date: "2026-03-12", linked_event: "North Gate access" },
       { category: "material", item_name: "Additional bedding stone", unit: "t", hours: null, qty: 18, rate: 34, notes: "Extra bedding/surround due to relay and revised invert levels.", tags: ["material_extra"], start_date: "2026-03-12", end_date: "2026-03-12", linked_event: "North Gate drainage" },
     ],
     prelims: [
@@ -764,6 +766,8 @@ const EVENTS: DemoEvent[] = [
       { category: "labour", item_name: "Tyler - steel fixer / carpenter SF", unit: "hour", hours: 35, qty: 1, rate: 32, notes: "Affected operative from received CE010. 35 hours recorded due to repeated ST94 steel movement/rehandling, missing setting-out marks and obstruction within the work area between 24/11 and 27/11.", tags: ["standing_time", "additional_handling", "restricted_access"], start_date: "2025-11-24", end_date: "2025-11-27", linked_event: "ST94 steel fixing works" },
       { category: "labour", item_name: "S Wren - steel fixer / carpenter SF", unit: "hour", hours: 35, qty: 1, rate: 32, notes: "Affected operative from received CE010. Labour retained against ST94 measured works while the steel was moved multiple times and the workface was not available for productive fixing.", tags: ["standing_time", "additional_handling", "restricted_access"], start_date: "2025-11-24", end_date: "2025-11-27", linked_event: "ST94 steel fixing works" },
       { category: "labour", item_name: "T Wren - steel fixer / carpenter SF", unit: "hour", hours: 35, qty: 1, rate: 32, notes: "Affected operative from received CE010. 35 hours recorded for disrupted steel fixing due to ST94 rehandling, no setting-out marks and Contractor's plant/machinery left in the work area.", tags: ["standing_time", "missing_information", "restricted_access"], start_date: "2025-11-24", end_date: "2025-11-27", linked_event: "ST94 steel fixing works" },
+      { category: "plant", item_name: "Telehandler / lifting support", unit: "hour", hours: 12, qty: 1, rate: 58, notes: "Intermittent lifting support for repeated ST94 reinforcement movement, rehandling and workface clearance during the affected period.", tags: ["additional_handling", "restricted_access"], start_date: "2025-11-24", end_date: "2025-11-27", linked_event: "ST94 steel fixing works" },
+      { category: "plant", item_name: "MEWP / access equipment standby", unit: "day", hours: null, qty: 2, rate: 120, notes: "Access equipment retained while setting-out marks and workface availability were resolved.", tags: ["standing_time", "restricted_access"], start_date: "2025-11-24", end_date: "2025-11-27", linked_event: "ST94 steel fixing works" },
     ],
     prelims: [
       { name: "Site supervisor", qty: 1, unit: "day", rate: 340, notes: "24/11/2025 to 27/11/2025 - coordination of affected gang, workface access issues, steel rehandling records and client/main contractor interface.", prelim_type: "staff", start_date: "2025-11-24", end_date: "2025-11-27", linked_event: "ST94 steel fixing works" },
@@ -1033,6 +1037,39 @@ function assertNoDuplicateDemoResourceRows(rows: any[]) {
   }
 }
 
+function normaliseDemoActivityName(value: string | null | undefined) {
+  return String(value || "General activity").trim().toLowerCase();
+}
+
+function assertLabourPlantActivityCoverage(events: DemoEvent[]) {
+  const mismatches: string[] = [];
+
+  for (const event of events) {
+    const labourActivities = new Set(
+      event.resources
+        .filter((resource) => resource.category === "labour")
+        .map((resource) => normaliseDemoActivityName(resource.linked_event))
+    );
+    const plantActivities = new Set(
+      event.resources
+        .filter((resource) => resource.category === "plant")
+        .map((resource) => normaliseDemoActivityName(resource.linked_event))
+    );
+
+    for (const activity of labourActivities) {
+      if (!plantActivities.has(activity)) mismatches.push(`${event.event_reference}: plant missing for "${activity}"`);
+    }
+
+    for (const activity of plantActivities) {
+      if (!labourActivities.has(activity)) mismatches.push(`${event.event_reference}: labour missing for "${activity}"`);
+    }
+  }
+
+  if (mismatches.length) {
+    throw new Error(`Demo seed labour/plant activity coverage mismatch: ${mismatches.join("; ")}`);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const adminUser = await getAuthUserFromRequest(req);
@@ -1048,6 +1085,14 @@ export async function POST(req: NextRequest) {
     if (users.error) throw users.error;
     const target = ((users.data as { users?: Array<{ id?: string; email?: string | null }> } | null)?.users ?? []).find((u: { id?: string; email?: string | null }) => normalizeEmail(u.email) === targetEmail);
     if (!target?.id) return NextResponse.json({ error: `No Supabase auth user found for ${targetEmail}` }, { status: 404 });
+
+    assertLabourPlantActivityCoverage(EVENTS);
+    assertNoDuplicateDemoResourceRows(
+      EVENTS.flatMap((event) => event.resources.map((resource) => ({
+        ...resource,
+        event_id: `${event.project_name}:${event.event_number}`,
+      })))
+    );
 
     const oldIds = await collectExistingDemoEventIds(admin, target.id);
 
@@ -1076,11 +1121,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (oldIds.length) {
+      await optionalQuery((admin as any).from("event_file_share_links").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_actions").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_rebuttals").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_ai_drafts").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_packs").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_files").delete().in("event_id", oldIds));
+      await optionalQuery((admin as any).from("event_contract_files").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_review_settings").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_valuation_settings").delete().in("event_id", oldIds));
       await optionalQuery((admin as any).from("event_prelim_lines").delete().in("event_id", oldIds));
@@ -1093,6 +1140,32 @@ export async function POST(req: NextRequest) {
     await optionalQuery((admin as any).from("projects").delete().eq("user_id", target.id).in("project_name", PROJECTS));
 
     const now = new Date().toISOString();
+    const demoProjects = Array.from(
+      new Map(
+        EVENTS.map((event) => [
+          demoProjectKey(event.project_name, event.main_contractor),
+          {
+            user_id: target.id,
+            project_name: event.project_name,
+            main_contractor: event.main_contractor,
+            contract_type: event.contract_type,
+            status: "live",
+            updated_at: now,
+          },
+        ])
+      ).values()
+    );
+    const projectInsert = await (admin as any).from("projects")
+      .upsert(demoProjects, { onConflict: "user_id,project_name,main_contractor" })
+      .select("id,project_name,main_contractor");
+    if (projectInsert.error) throw new Error(`Demo seed failed while creating projects: ${describeSupabaseError(projectInsert.error)}`);
+    const projectIds = new Map<string, string>(
+      (projectInsert.data || []).map((project: { id: string; project_name: string; main_contractor?: string | null }) => [
+        demoProjectKey(project.project_name, project.main_contractor),
+        project.id,
+      ])
+    );
+
     const eventIds = new Map<string, string>();
 
     const eventRows = EVENTS.map((e) => {
@@ -1105,6 +1178,7 @@ export async function POST(req: NextRequest) {
         title: e.title,
         project_name: e.project_name,
         main_contractor: e.main_contractor,
+        project_id: projectIds.get(demoProjectKey(e.project_name, e.main_contractor)),
         status: e.status,
         contract_type: e.contract_type,
         contract_source: e.contract_source,
@@ -1113,7 +1187,7 @@ export async function POST(req: NextRequest) {
         event_date: e.event_date,
         notice_period_days: e.notice_period_days,
         notification_deadline: addDays(e.event_date, e.notice_period_days),
-        payment_status: seedPaymentStatusForInsert(e.payment_status),
+        payment_status: e.payment_status,
         submitted_date: e.submitted_date,
         expected_payment_date: e.expected_payment_date,
         last_action_type: e.last_action_type,
@@ -1125,7 +1199,14 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    const eventsInsert = await trySeedInsert(admin, "events", eventRows, "events");
+    let eventsInsert = await trySeedInsert(admin, "events", eventRows, "events");
+    if (eventsInsert.error && isPaymentStatusConstraintError(eventsInsert.error)) {
+      const legacyEventRows = eventRows.map((row) => ({
+        ...row,
+        payment_status: row.payment_status === "submitted_for_payment" ? "applied" : row.payment_status,
+      }));
+      eventsInsert = await trySeedInsert(admin, "events", legacyEventRows, "events with legacy payment status");
+    }
     if (eventsInsert.error) throw new Error(`Demo seed failed while inserting events: ${describeSupabaseError(eventsInsert.error)}`);
 
     const basisRows = EVENTS.map((e) => ({ user_id: target.id, event_id: eventIds.get(`${e.project_name}:${e.event_number}`), ...e.basis, updated_at: now }));
@@ -1155,6 +1236,7 @@ export async function POST(req: NextRequest) {
         };
       });
     });
+    assertLabourPlantActivityCoverage(EVENTS);
     assertNoDuplicateDemoResourceRows(resourceRows);
     const resourceInsert = await insertResourceRowsWithUnitFallback(admin, resourceRows);
     if (resourceInsert.error) throw resourceInsert.error;
@@ -1301,6 +1383,7 @@ export async function POST(req: NextRequest) {
       return {
         user_id: target.id,
         title: ewn.title,
+        project_id: projectIds.get(demoProjectKey(ewn.project_name, ewn.main_contractor)),
         project_name: ewn.project_name,
         main_contractor: ewn.main_contractor,
         contract_type: ewn.contract_type,

@@ -53,6 +53,7 @@ type CecaPlantRate = {
   hire_unit: string;
   ceca_rate: number;
   year: number;
+  search_aliases?: string | null;
 };
 
 const c = {
@@ -161,6 +162,111 @@ function cecaLabel(item?: CecaPlantRate | null) {
   if (!item) return "";
   const capacity = item.capacity_text?.trim();
   return capacity ? `${item.item_name} — ${capacity}` : item.item_name;
+}
+
+function shortenCecaText(value?: string | null, maxLength = 74) {
+  let text = String(value ?? "")
+    .replace(/^-\s*/g, "")
+    .replace(/^continued\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  text = text
+    .split(/\.\s*Capacity\b/i)[0]
+    .split(/\s+Capacity\s*\(/i)[0]
+    .split(/\s+Capacity\s+is\b/i)[0]
+    .split(/\s+complete with\b/i)[0]
+    .trim();
+
+  if (text.includes(" - (") && text.length > 50) {
+    text = text.split(" - (")[0].trim();
+  }
+
+  text = text.replace(/\s+-\s*$/g, "").replace(/[.:\s]+$/g, "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1).trim()}…`;
+}
+
+function cecaDisplayName(item?: CecaPlantRate | null) {
+  if (!item) return "";
+  const itemName = shortenCecaText(item.item_name);
+  const capacity = shortenCecaText(item.capacity_text, 44);
+  return capacity ? `${itemName} - ${capacity}` : itemName;
+}
+
+function cecaFullSourceNote(item: CecaPlantRate, baseRate: number, unit: string) {
+  return `CECA 2025 source: ${cecaLabel(item)}. Base rate ${money(baseRate)}/${unit}.`;
+}
+
+function normaliseCecaSearch(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/tonnes?|tons?/g, "t")
+    .replace(/\b(\d+(?:\.\d+)?)\s*t\b/g, (_, n) => `${Number(n).toString()}t`)
+    .replace(/\b360\b/g, "excavator")
+    .replace(/[^a-z0-9.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function capacityTonnes(capacity?: string | null) {
+  const match = capacity?.match(/up to\s+(\d+(?:\.\d+)?)\s*tonnes?/i);
+  return match ? Number(match[1]) : null;
+}
+
+function queryTonnes(query: string) {
+  const match = query.match(/\b(\d+(?:\.\d+)?)\s*t\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function capacityRank(item: CecaPlantRate, queryTonnage: number | null) {
+  const tonnes = capacityTonnes(item.capacity_text);
+  if (!tonnes || !queryTonnage) return 0;
+  if (tonnes >= queryTonnage) return 100 - Math.abs(tonnes - queryTonnage);
+  return 25 - Math.abs(tonnes - queryTonnage);
+}
+
+function formatTonnageAlias(value: number) {
+  return Number.isInteger(value) ? String(value) : String(value).replace(/\.0$/, "");
+}
+
+function tonnageAliases(tonnes: number) {
+  const values = new Set<string>([formatTonnageAlias(tonnes)]);
+  const floored = Math.floor(tonnes);
+  if (floored > 0) values.add(String(floored));
+  if (Number.isInteger(tonnes) && tonnes > 1) values.add(String(tonnes - 1));
+  return [...values];
+}
+
+function pushPlantTonnageAliases(bits: string[], tonnes: number, plantNames: string[]) {
+  for (const value of tonnageAliases(tonnes)) {
+    bits.push(`${value}t`, `${value} t`, `${value} tonne`, `${value} ton`);
+    for (const plantName of plantNames) {
+      bits.push(`${value}t ${plantName}`, `${value} tonne ${plantName}`, `${value} ton ${plantName}`);
+    }
+  }
+}
+
+function cecaSearchText(item: CecaPlantRate) {
+  const tonnes = capacityTonnes(item.capacity_text);
+  const bits = [item.section_name, item.item_name, item.capacity_text ?? "", item.search_aliases ?? ""];
+  const identity = `${item.section_name} ${item.item_name}`;
+
+  if (tonnes) {
+    pushPlantTonnageAliases(bits, tonnes, []);
+  }
+
+  if (tonnes && /excavator|backhoe/i.test(identity)) {
+    bits.push("excavator", "digger", "360", "tracked excavator", "crawler excavator", "backhoe", "jcb");
+    pushPlantTonnageAliases(bits, tonnes, ["excavator", "digger", "360", "tracked excavator", "crawler excavator"]);
+  }
+
+  if (tonnes && /dumper|dump truck/i.test(identity)) {
+    bits.push("dumper", "site dumper", "tracked dumper", "dump truck");
+    pushPlantTonnageAliases(bits, tonnes, ["dumper", "site dumper", "tracked dumper", "dump truck"]);
+  }
+
+  return normaliseCecaSearch(bits.join(" "));
 }
 
 export default function RateCardsPage() {
@@ -294,6 +400,24 @@ export default function RateCardsPage() {
 
     try {
       const user = await getRequiredUser(supabase);
+      const cecaPromise = (async () => {
+        const withAliases = await (supabase as any).from("ceca_plant_rates_simple")
+          .select("id,section_name,item_name,capacity_text,hire_unit,ceca_rate,year,search_aliases")
+          .order("section_name", { ascending: true })
+          .order("item_name", { ascending: true });
+
+        if (!withAliases.error) return withAliases;
+
+        const message = String(withAliases.error.message ?? "").toLowerCase();
+        const missingAliasColumn = withAliases.error.code === "42703" || withAliases.error.code === "PGRST204" || message.includes("search_aliases");
+        if (!missingAliasColumn) return withAliases;
+
+        return (supabase as any).from("ceca_plant_rates_simple")
+          .select("id,section_name,item_name,capacity_text,hire_unit,ceca_rate,year")
+          .order("section_name", { ascending: true })
+          .order("item_name", { ascending: true });
+      })();
+
       const [rateRes, eventRes, settingsRes, cecaRes] = await Promise.all([
         (supabase as any).from("rate_cards")
           .select("id,user_id,category,name,unit,rate,notes,active,project_name,main_contractor,source_type,ceca_item_id,ceca_rate,adjustment_percent,final_rate,created_at,updated_at")
@@ -308,10 +432,7 @@ export default function RateCardsPage() {
         (supabase as any).from("project_rate_settings")
           .select("id,project_name,main_contractor,ceca_adjustment_percent,use_ceca_for_plant")
           .eq("user_id", user.id),
-        (supabase as any).from("ceca_plant_rates_simple")
-          .select("id,section_name,item_name,capacity_text,hire_unit,ceca_rate,year")
-          .order("section_name", { ascending: true })
-          .order("item_name", { ascending: true }),
+        cecaPromise,
       ]);
 
       if (rateRes.error) throw rateRes.error;
@@ -381,23 +502,30 @@ export default function RateCardsPage() {
 
   const modalSuggestions = useMemo(() => {
     if (form.category === "plant" && form.source_type === "ceca") {
-      const query = form.ceca_query.trim().toLowerCase();
+      const query = normaliseCecaSearch(form.ceca_query);
+      const queryParts = query.split(" ").filter(Boolean);
+      const tonnage = queryTonnes(query);
       if (!query) return [];
       return cecaItems
         .filter((item) => {
-          const hay = [item.item_name, item.capacity_text ?? "", item.section_name].join(" ").toLowerCase();
-          return hay.includes(query);
+          const hay = cecaSearchText(item);
+          return queryParts.every((part) => hay.includes(part));
         })
         .sort((a, b) => {
-          const aStarts = query ? cecaLabel(a).toLowerCase().startsWith(query) : false;
-          const bStarts = query ? cecaLabel(b).toLowerCase().startsWith(query) : false;
+          const aHay = cecaSearchText(a);
+          const bHay = cecaSearchText(b);
+          const aStarts = query ? aHay.startsWith(query) : false;
+          const bStarts = query ? bHay.startsWith(query) : false;
           if (aStarts !== bStarts) return aStarts ? -1 : 1;
+          const rankDiff = capacityRank(b, tonnage) - capacityRank(a, tonnage);
+          if (rankDiff !== 0) return rankDiff;
           return cecaLabel(a).localeCompare(cecaLabel(b));
         })
         .slice(0, query ? 12 : 8)
         .map((item) => ({
           id: item.id,
-          name: cecaLabel(item),
+          name: cecaDisplayName(item),
+          fullName: cecaLabel(item),
           unit: item.hire_unit,
           source: "ceca" as const,
           cecaRate: Number(item.ceca_rate ?? 0),
@@ -1201,6 +1329,7 @@ export default function RateCardsPage() {
                             adjustment_percent: String(adjustment),
                             final_rate: String(finalRate),
                             rate: String(finalRate),
+                            notes: prev.notes.trim() ? prev.notes : cecaFullSourceNote(picked.item, base, picked.unit || prev.unit || "hour"),
                           }));
                         } else {
                           setForm((prev) => ({ ...prev, name: picked.name, unit: picked.unit || prev.unit || "each" }));
@@ -1232,6 +1361,7 @@ export default function RateCardsPage() {
                         <button
                           key={`${item.source}_${item.name}_${item.id ?? idx}`}
                           type="button"
+                          title={item.source === "ceca" && item.fullName ? item.fullName : item.name}
                           onMouseDown={(e) => {
                             e.preventDefault();
                             if (form.category === "plant" && form.source_type === "ceca" && item.item) {
@@ -1248,6 +1378,7 @@ export default function RateCardsPage() {
                                 adjustment_percent: String(adjustment),
                                 final_rate: String(finalRate),
                                 rate: String(finalRate),
+                                notes: prev.notes.trim() ? prev.notes : cecaFullSourceNote(item.item, base, item.unit || prev.unit || "hour"),
                               }));
                             } else {
                               setForm((prev) => ({ ...prev, name: item.name, unit: item.unit || prev.unit || "each" }));
@@ -1272,15 +1403,17 @@ export default function RateCardsPage() {
                           }}
                         >
                           <span style={{ minWidth: 0, display: "grid", gap: 4 }}>
-                            <span style={{ display: "block", lineHeight: 1.25, fontSize: 15 }}>{item.source === "ceca" && item.item ? item.item.item_name : item.name}</span>
+                            <span style={{ display: "block", lineHeight: 1.25, fontSize: 15 }}>{item.name}</span>
                             {item.source === "ceca" && item.item ? (
                               <>
-                                <span style={{ display: "block", fontSize: 13, color: c.black, fontWeight: 800 }}>
-                                  {item.item.capacity_text || "Standard size"}
-                                </span>
                                 <span style={{ display: "block", fontSize: 12, color: c.sub, fontWeight: 600 }}>
                                   {item.item.section_name} · {money(Number(item.cecaRate ?? 0))}/{item.unit}
                                 </span>
+                                {item.fullName && item.fullName !== item.name ? (
+                                  <span style={{ display: "block", fontSize: 11, color: c.sub, fontWeight: 550, lineHeight: 1.35 }}>
+                                    Full CECA wording saved in notes
+                                  </span>
+                                ) : null}
                               </>
                             ) : (
                               <span style={{ display: "block", fontSize: 12, color: c.sub, fontWeight: 600 }}>

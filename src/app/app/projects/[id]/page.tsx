@@ -396,7 +396,14 @@ export default function ProjectDetailPage() {
     try {
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
-      const update = await (supabase as any).from("events").update(patch).eq("id", eventId).eq("user_id", user.id);
+      let update = await (supabase as any).from("events").update(patch).eq("id", eventId).eq("user_id", user.id);
+
+      if (update.error && patch.payment_status === "submitted_for_payment") {
+        update = await (supabase as any).from("events")
+          .update({ ...patch, payment_status: "applied" })
+          .eq("id", eventId)
+          .eq("user_id", user.id);
+      }
 
       if (update.error) {
         const message = String(update.error.message || "");

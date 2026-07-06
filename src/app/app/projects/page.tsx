@@ -103,7 +103,7 @@ function paidValue(event: EventRow) {
 
 function outstandingValue(event: EventRow) {
   if (typeof event.balance_outstanding === "number" && Number.isFinite(event.balance_outstanding)) return event.balance_outstanding;
-  if (normalisePaymentStatus(event.status) === "paid" || normaliseCommercialStatus(event.status) === "paid") return 0;
+  if (normalisePaymentStatus(event.payment_status) === "paid" || normaliseCommercialStatus(event.status) === "paid") return 0;
   return Math.max(0, assessedValue(event) - paidValue(event));
 }
 
@@ -151,7 +151,7 @@ function ewnBelongsToProject(ewn: EwnRow, project: ProjectRow) {
 function isOverdue(event: EventRow) {
   const status = normaliseCommercialStatus(event.status);
   if (status !== "submitted" && status !== "accepted") return false;
-  if (normalisePaymentStatus(event.status) === "paid") return false;
+  if (normalisePaymentStatus(event.payment_status) === "paid") return false;
   if (!event.expected_payment_date) return false;
   const due = new Date(event.expected_payment_date);
   if (Number.isNaN(due.getTime())) return false;

@@ -330,6 +330,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ received: true });
   } catch (error: any) {
     console.error("Stripe webhook processing warning:", error?.message || error);
-    return NextResponse.json({ received: true, warning: error?.message || "Webhook processing warning" });
+    return NextResponse.json(
+      { error: error?.message || "Webhook processing failed" },
+      { status: 500 }
+    );
   }
 }
