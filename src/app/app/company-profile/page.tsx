@@ -199,8 +199,8 @@ export default function CompanyProfilePage() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
           {[
-            ["Company legal name", "company_name", "e.g. M O’Brien Civil Engineering Ltd"],
-            ["Trading name", "trading_name", "e.g. M O’Brien"],
+            ["Company legal name", "company_name", "e.g. Northline Civil Engineering Ltd"],
+            ["Trading name", "trading_name", "e.g. Northline Civils"],
             ["Role in submissions", "role", "Subcontractor"],
             ["Company email", "email", "commercial@company.co.uk"],
             ["Company phone", "phone", ""],

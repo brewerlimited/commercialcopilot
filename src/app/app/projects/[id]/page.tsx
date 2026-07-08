@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getContractLabel } from "@/lib/contracts";
-import { displayEventReference } from "@/lib/eventReference";
+import { displayEventReference, displayEventTitle } from "@/lib/eventReference";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
 import {
   PAYMENT_STATUS_OPTIONS,
@@ -181,7 +181,7 @@ function nextTrackingState(next: TrackingUpdate) {
     const paymentWasExplicitlyChanged = Object.prototype.hasOwnProperty.call(next, "payment_status");
     if (status === "paid" || status === "complete") patch.payment_status = "paid";
     if ((status === "submitted" || status === "accepted") && !paymentWasExplicitlyChanged) patch.payment_status = "submitted_for_payment";
-    if ((status === "draft" || status === "review" || status === "ready" || status === "rejected") && !paymentWasExplicitlyChanged) patch.payment_status = "not_applied";
+    if ((status === "draft" || status === "review" || status === "ready" || status === "rejected" || status === "void") && !paymentWasExplicitlyChanged) patch.payment_status = "not_applied";
   }
   if (patch.payment_status === "paid" && !patch.status) patch.status = "paid";
   return patch;
@@ -203,7 +203,11 @@ function recoveryActionSummary(patch: Partial<EventRow>) {
 
 function paymentEditable(event: EventRow) {
   const status = normaliseCommercialStatus(event.status);
-  return status === "submitted" || status === "accepted" || status === "paid" || normalisePaymentStatus(event.payment_status) === "paid";
+  return status !== "void" && (status === "submitted" || status === "accepted" || status === "paid" || normalisePaymentStatus(event.payment_status) === "paid");
+}
+
+function isVoided(event: EventRow) {
+  return normaliseCommercialStatus(event.status) === "void";
 }
 
 function projectKey(project: { project_name?: string | null; main_contractor?: string | null }) {
@@ -229,12 +233,13 @@ function isOverdue(event: EventRow) {
 }
 
 function nextAction(events: EventRow[], ewns: EwnRow[]) {
-  const overdue = events.filter(isOverdue).sort((a, b) => outstandingValue(b) - outstandingValue(a))[0];
+  const activeEvents = events.filter((event) => !isVoided(event));
+  const overdue = activeEvents.filter(isOverdue).sort((a, b) => outstandingValue(b) - outstandingValue(a))[0];
   if (overdue) return { label: "Chase payment", detail: `${displayEventReference(overdue)} is overdue. Outstanding ${money(outstandingValue(overdue))}.`, href: `/app?trackPayment=${overdue.id}`, tone: "red" as const };
   const openEwn = ewns.find((ewn) => ewn.status !== "converted" && ewn.status !== "closed");
   if (openEwn) return { label: "Review EWN", detail: openEwn.title || "Open EWN needs review.", href: `/app/ewns?ewn=${openEwn.id}`, tone: "amber" as const };
-  const draft = events.find((event) => ["draft", "review", "ready"].includes(normaliseCommercialStatus(event.status)));
-  if (draft) return { label: "Continue CE", detail: draft.title || displayEventReference(draft), href: `/app/event/${draft.id}`, tone: "blue" as const };
+  const draft = activeEvents.find((event) => ["draft", "review", "ready"].includes(normaliseCommercialStatus(event.status)));
+  if (draft) return { label: "Continue CE", detail: displayEventTitle(draft), href: `/app/event/${draft.id}`, tone: "blue" as const };
   return { label: "No urgent action", detail: "Project is commercially quiet at the moment.", href: "/app/new", tone: "neutral" as const };
 }
 
@@ -321,11 +326,12 @@ export default function ProjectDetailPage() {
   }, [params.id, router]);
 
   const summary = useMemo(() => {
-    const recoverable = events.reduce((sum, event) => sum + readTotal(event.event_financial_summary), 0);
-    const submitted = events.filter((event) => ["submitted", "accepted", "paid"].includes(normaliseCommercialStatus(event.status))).reduce((sum, event) => sum + assessedValue(event), 0);
-    const paid = events.reduce((sum, event) => sum + paidValue(event), 0);
-    const outstanding = events.reduce((sum, event) => sum + outstandingValue(event), 0);
-    return { recoverable, submitted, paid, outstanding, overdue: events.filter(isOverdue), openEwns: ewns.filter((ewn) => ewn.status !== "converted" && ewn.status !== "closed"), action: nextAction(events, ewns) };
+    const activeEvents = events.filter((event) => !isVoided(event));
+    const recoverable = activeEvents.reduce((sum, event) => sum + readTotal(event.event_financial_summary), 0);
+    const submitted = activeEvents.filter((event) => ["submitted", "accepted", "paid"].includes(normaliseCommercialStatus(event.status))).reduce((sum, event) => sum + assessedValue(event), 0);
+    const paid = activeEvents.reduce((sum, event) => sum + paidValue(event), 0);
+    const outstanding = activeEvents.reduce((sum, event) => sum + outstandingValue(event), 0);
+    return { recoverable, submitted, paid, outstanding, overdue: activeEvents.filter(isOverdue), openEwns: ewns.filter((ewn) => ewn.status !== "converted" && ewn.status !== "closed"), action: nextAction(events, ewns) };
   }, [events, ewns]);
 
   async function updateProjectEventTracking(eventId: string, next: TrackingUpdate) {
@@ -443,7 +449,7 @@ export default function ProjectDetailPage() {
     }
   }
 
-  if (loading) return <div style={{ color: c.sub, fontWeight: 800 }}>Loading project...</div>;
+  if (loading) return <div style={{ color: c.sub, fontWeight: 800, fontSize: 13 }}>Loading project...</div>;
   if (err) return <div style={{ border: `1px solid ${c.redBd}`, background: c.redBg, color: c.redTx, borderRadius: 16, padding: 16, fontWeight: 800 }}>{err}</div>;
   if (!project) return <div style={{ color: c.sub, fontWeight: 800 }}>Project not found.</div>;
 
@@ -453,15 +459,15 @@ export default function ProjectDetailPage() {
   const encodedContract = project.contract_type ? encodeURIComponent(project.contract_type) : "";
 
   return (
-    <div style={{ display: "grid", gap: 18 }}>
-      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 26 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", flexWrap: "wrap" }}>
-          <div>
-            <Link href="/app/projects" style={{ color: c.sub, fontSize: 13, fontWeight: 800, textDecoration: "none" }}>← Projects</Link>
-            <h1 style={{ margin: "8px 0 0", color: c.black, fontSize: 28, letterSpacing: 0, lineHeight: 1.15 }}>{project.project_name}</h1>
-            <p style={{ margin: "7px 0 0", color: c.sub, fontSize: 13, fontWeight: 700 }}>{project.main_contractor || "Contractor not set"} • {getContractLabel(project.contract_type)}</p>
+    <div style={{ display: "grid", gap: 18, maxWidth: 1240 }}>
+      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 22, boxShadow: "var(--shadow-soft)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0, display: "grid", gap: 7 }}>
+            <Link href="/app/projects" style={{ color: c.sub, fontSize: 12, fontWeight: 800, textDecoration: "none", lineHeight: 1.2 }}>← Projects</Link>
+            <h1 style={{ margin: 0, color: c.text, fontSize: "var(--fs-page-title)", fontWeight: 700, letterSpacing: 0, lineHeight: "var(--lh-tight)" }}>{project.project_name}</h1>
+            <p style={{ margin: 0, color: c.sub, fontSize: 13, lineHeight: 1.5, fontWeight: 650 }}>{project.main_contractor || "Contractor not set"} • {getContractLabel(project.contract_type)}</p>
           </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <Link href={`/app/new?project=${encodedProject}&main_contractor=${encodedContractor}&contract_type=${encodedContract}&project_id=${project.id}`} style={buttonStyle("primary")}>+ New CE</Link>
             <Link href={`/app/ewns/new?project=${encodedProject}&main_contractor=${encodedContractor}&contract_type=${encodedContract}&project_id=${project.id}`} style={buttonStyle("quiet")}>+ New EWN</Link>
             <Link href="/app/rates" style={buttonStyle("quiet")}>Rate cards</Link>
@@ -480,29 +486,30 @@ export default function ProjectDetailPage() {
 
       <section style={{ border: `1px solid ${actionTone.bd}`, background: actionTone.bg, color: actionTone.tx, borderRadius: 20, padding: 18, display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.02em" }}>Next action</div>
-          <div style={{ marginTop: 6, fontSize: 18, fontWeight: 800 }}>{summary.action.label}</div>
+          <div style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: "var(--tracking-label)" }}>Next action</div>
+          <div style={{ marginTop: 6, fontSize: 18, lineHeight: 1.2, fontWeight: 800 }}>{summary.action.label}</div>
           <div style={{ marginTop: 4, fontSize: 13, fontWeight: 700 }}>{summary.action.detail}</div>
         </div>
         <Link href={summary.action.href} style={{ ...buttonStyle("primary"), background: c.black, color: c.blackContrast }}>Open action →</Link>
       </section>
 
-      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 18 }}>
-        <h2 style={{ margin: 0, color: c.black, fontSize: 18 }}>Project CEs / variations</h2>
+      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+        <h2 style={{ margin: 0, color: c.text, fontSize: "var(--fs-section-title)", fontWeight: 700, lineHeight: "var(--lh-tight)" }}>Project CEs / variations</h2>
         <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
           {events.length === 0 ? <div style={{ color: c.sub, fontWeight: 800, padding: 12 }}>No CEs on this project yet.</div> : events.map((event) => {
             const editable = paymentEditable(event);
             const balance = outstandingValue(event);
+            const voided = isVoided(event);
             const balanceTone = isOverdue(event) ? { bg: c.redBg, bd: c.redBd, tx: c.redTx } : balance > 0 ? { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx } : { bg: c.greenBg, bd: c.greenBd, tx: c.greenTx };
             return (
-            <div key={event.id} style={{ border: `1px solid ${c.border}`, background: c.soft, borderRadius: 16, padding: 14, display: "grid", gap: 12 }}>
+            <div key={event.id} style={{ border: `1px solid ${c.border}`, background: c.soft, borderRadius: 16, padding: 14, display: "grid", gap: 12, opacity: voided ? 0.68 : 1 }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) 130px 150px 140px", gap: 12, alignItems: "center" }}>
                 <div style={{ minWidth: 0 }}>
-                  <Link href={`/app/event/${event.id}`} style={{ color: c.black, fontSize: 15, fontWeight: 800, textDecoration: "none" }}>{displayEventReference(event)} — {event.title || "Untitled CE"}</Link>
+                  <Link href={`/app/event/${event.id}`} style={{ color: voided ? c.sub : c.text, fontSize: 14, lineHeight: 1.35, fontWeight: 800, textDecoration: "none" }}>{displayEventTitle(event)}</Link>
                   <div style={{ marginTop: 4, color: c.sub, fontSize: 12, fontWeight: 700 }}>Created {formatDateShort(event.created_at)}</div>
                 </div>
-                <Badge label={getCommercialStatusLabel(event.status)} tone="blue" />
-                <Badge label={getPaymentStatusLabel(event.payment_status)} tone={normalisePaymentStatus(event.payment_status) === "paid" ? "green" : isOverdue(event) ? "red" : "amber"} />
+                <Badge label={getCommercialStatusLabel(event.status)} tone={voided ? "neutral" : "blue"} />
+                {voided ? <Badge label="Excluded" tone="neutral" /> : <Badge label={getPaymentStatusLabel(event.payment_status)} tone={normalisePaymentStatus(event.payment_status) === "paid" ? "green" : isOverdue(event) ? "red" : "amber"} />}
                 <div style={{ color: c.black, fontWeight: 800, textAlign: "right" }}>{money(outstandingValue(event))}</div>
               </div>
               <details style={{ borderTop: `1px solid ${c.border}`, paddingTop: 10 }}>
@@ -528,7 +535,14 @@ export default function ProjectDetailPage() {
                   <TrackingInput label="Agreed payment" type="date" value={toDateInputValue(event.agreed_payment_date)} onChange={(value) => void updateProjectEventTracking(event.id, { agreed_payment_date: value || null })} disabled={!editable} />
                   <TrackingInput label="Client response" value={event.client_response ?? ""} onChange={(value) => void updateProjectEventTracking(event.id, { client_response: value })} disabled={!editable} wide placeholder="e.g. Awaiting QS assessment / queried labour" />
                   <TrackingInput label="Dispute / short-pay reason" value={event.dispute_reason ?? ""} onChange={(value) => void updateProjectEventTracking(event.id, { dispute_reason: value })} disabled={!editable} wide placeholder="e.g. Prelims discounted / causation challenged" />
-                  <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+                  <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => void updateProjectEventTracking(event.id, { status: voided ? "draft" : "void" })}
+                      style={{ ...buttonStyle("secondary"), cursor: "pointer" }}
+                    >
+                      {voided ? "Reinstate CE/VO" : "Void CE/VO"}
+                    </button>
                     <Link href={`/app/event/${event.id}`} style={buttonStyle("primary")}>Open CE →</Link>
                   </div>
                 </div>
@@ -539,14 +553,14 @@ export default function ProjectDetailPage() {
         </div>
       </section>
 
-      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 18 }}>
-        <h2 style={{ margin: 0, color: c.black, fontSize: 18 }}>Project EWNs</h2>
+      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 18, boxShadow: "var(--shadow-soft)" }}>
+        <h2 style={{ margin: 0, color: c.text, fontSize: "var(--fs-section-title)", fontWeight: 700, lineHeight: "var(--lh-tight)" }}>Project EWNs</h2>
         <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
           {ewns.length === 0 ? <div style={{ color: c.sub, fontWeight: 800, padding: 12 }}>No EWNs on this project yet.</div> : ewns.map((ewn) => (
             <Link key={ewn.id} href={ewn.converted_event_id ? `/app/event/${ewn.converted_event_id}` : `/app/ewns?ewn=${ewn.id}`} style={{ textDecoration: "none", color: "inherit" }}>
               <div style={{ border: `1px solid ${c.border}`, background: c.soft, borderRadius: 16, padding: 14, display: "grid", gridTemplateColumns: "minmax(260px, 1fr) 120px 140px", gap: 12, alignItems: "center" }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ color: c.black, fontSize: 15, fontWeight: 800 }}>{ewn.title || "Untitled EWN"}</div>
+                  <div style={{ color: c.text, fontSize: 14, lineHeight: 1.35, fontWeight: 800 }}>{ewn.title || "Untitled EWN"}</div>
                   <div style={{ marginTop: 4, color: c.sub, fontSize: 12, fontWeight: 700 }}>{ewn.impact || "Impact not recorded"}</div>
                 </div>
                 <div style={{ color: c.sub, fontSize: 12, fontWeight: 800 }}>{formatDateShort(ewn.event_date)}</div>
@@ -563,23 +577,24 @@ export default function ProjectDetailPage() {
 function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 18, padding: 16, minHeight: 98 }}>
-      <div style={{ color: c.sub, fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.02em" }}>{label}</div>
-      <div style={{ marginTop: 14, color: c.black, fontSize: 23, fontWeight: 800, letterSpacing: 0, lineHeight: 1.08 }}>{value}</div>
+      <div style={{ color: c.sub, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "var(--tracking-label)", lineHeight: 1.25 }}>{label}</div>
+      <div style={{ marginTop: 14, color: c.text, fontSize: 22, fontWeight: 800, letterSpacing: 0, lineHeight: 1.08 }}>{value}</div>
     </div>
   );
 }
 
-function Badge({ label, tone }: { label: string; tone: "green" | "blue" | "amber" | "red" }) {
-  const colors = tone === "green" ? { bg: c.greenBg, bd: c.greenBd, tx: c.greenTx } : tone === "blue" ? { bg: c.blueBg, bd: c.blueBd, tx: c.blueTx } : tone === "red" ? { bg: c.redBg, bd: c.redBd, tx: c.redTx } : { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx };
+function Badge({ label, tone }: { label: string; tone: "green" | "blue" | "amber" | "red" | "neutral" }) {
+  const colors = tone === "green" ? { bg: c.greenBg, bd: c.greenBd, tx: c.greenTx } : tone === "blue" ? { bg: c.blueBg, bd: c.blueBd, tx: c.blueTx } : tone === "red" ? { bg: c.redBg, bd: c.redBd, tx: c.redTx } : tone === "neutral" ? { bg: c.soft, bd: c.border, tx: c.sub } : { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx };
   return <span style={{ justifySelf: "start", border: `1px solid ${colors.bd}`, background: colors.bg, color: colors.tx, borderRadius: 999, padding: "7px 10px", fontSize: 12, fontWeight: 800, textTransform: "capitalize" }}>{label}</span>;
 }
 
-function buttonStyle(kind: "primary" | "quiet"): React.CSSProperties {
+function buttonStyle(kind: "primary" | "quiet" | "secondary"): React.CSSProperties {
   return {
     border: `1px solid ${kind === "primary" ? c.black : c.border}`,
     background: kind === "primary" ? c.black : c.input,
-    color: kind === "primary" ? c.blackContrast : c.black,
+    color: kind === "primary" ? c.blackContrast : kind === "secondary" ? c.text : c.black,
     borderRadius: 14,
+    minHeight: 42,
     padding: "11px 13px",
     textDecoration: "none",
     fontWeight: 800,

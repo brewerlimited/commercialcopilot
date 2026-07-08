@@ -498,26 +498,6 @@ function ReviewPageContent() {
   }, []);
 
 
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem("cc:generation-mode");
-      if (stored === "multistage" || stored === "standard") {
-        setGenerationMode(stored);
-      }
-    } catch {
-      // keep standard fallback
-    }
-  }, []);
-
-  function updateGenerationMode(mode: GenerationMode) {
-    setGenerationMode(mode);
-    try {
-      window.localStorage.setItem("cc:generation-mode", mode);
-    } catch {
-      // non-blocking preference only
-    }
-  }
-
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationStage, setGenerationStage] = useState("Preparing generation…");
@@ -525,7 +505,7 @@ function ReviewPageContent() {
   const progressTimerRef = useRef<number | null>(null);
   const [hasGeneratedPack, setHasGeneratedPack] = useState(false);
   const [forceGenerateMode, setForceGenerateMode] = useState(false);
-  const [generationMode, setGenerationMode] = useState<GenerationMode>("standard");
+  const generationMode: GenerationMode = "multistage";
   const [billingGateLoaded, setBillingGateLoaded] = useState(false);
   const [creditsRemaining, setCreditsRemaining] = useState(0);
   const [isAdminUnlimited, setIsAdminUnlimited] = useState(false);
@@ -570,34 +550,26 @@ function ReviewPageContent() {
     clearGenerationProgressTimer();
 
     const startedAt = Date.now();
-    const multiStage = generationMode === "multistage";
-    const targetMs = multiStage ? 120000 : 45000;
+    const targetMs = 120000;
 
     setGenerationProgress(3);
-    setGenerationStage(multiStage ? "Step 1 of 5: Extracting commercial context…" : "Preparing generation…");
+    setGenerationStage("Step 1 of 5: Extracting commercial context…");
     setGenerationEta(formatGenerationEta(targetMs / 1000));
 
     progressTimerRef.current = window.setInterval(() => {
       const elapsedMs = Date.now() - startedAt;
       const rawProgress = Math.min(91, 3 + (elapsedMs / targetMs) * 88);
 
-      if (multiStage) {
-        if (elapsedMs < 20000) {
-          setGenerationStage("Step 1 of 5: Extracting commercial context…");
-        } else if (elapsedMs < 45000) {
-          setGenerationStage("Step 2 of 5: Running Standard-for-Multi baseline for Excel tabs…");
-        } else if (elapsedMs < 95000) {
-          setGenerationStage("Step 3 of 5: Generating all enhanced commercial sections together…");
-        } else if (elapsedMs < 112000) {
-          setGenerationStage("Step 4 of 5: Running commercial director QA review…");
-        } else {
-          setGenerationStage("Step 5 of 5: Finalising workbook download…");
-        }
+      if (elapsedMs < 20000) {
+        setGenerationStage("Step 1 of 5: Extracting commercial context…");
+      } else if (elapsedMs < 45000) {
+        setGenerationStage("Step 2 of 5: Running Standard-for-Multi baseline for Excel tabs…");
+      } else if (elapsedMs < 95000) {
+        setGenerationStage("Step 3 of 5: Generating all enhanced commercial sections together…");
+      } else if (elapsedMs < 112000) {
+        setGenerationStage("Step 4 of 5: Running commercial director QA review…");
       } else {
-        if (elapsedMs < 15000) setGenerationStage("Analysing event data…");
-        else if (elapsedMs < 30000) setGenerationStage("Generating contract-aware narrative…");
-        else if (elapsedMs < 40000) setGenerationStage("Building workbook sections…");
-        else setGenerationStage("Finalising download…");
+        setGenerationStage("Step 5 of 5: Finalising workbook download…");
       }
 
       setGenerationEta(formatGenerationEta((targetMs - elapsedMs) / 1000));
@@ -1796,12 +1768,10 @@ function ReviewPageContent() {
             }}
           >
             <div style={{ fontSize: 22, fontWeight: 700, color: c.black }}>
-              {generationMode === "multistage" ? "Generating enhanced pack" : "Generating Excel pack"}
+              Generating enhanced pack
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.6, color: c.sub, marginTop: 8 }}>
-              {generationMode === "multistage"
-                ? "Extracting commercial context, strengthening causation, and preparing the workbook for download."
-                : "Building the workbook, grouping activities, and preparing the cost sheets for download."}
+              Extracting commercial context, strengthening causation, and preparing the workbook for download.
             </div>
             <div style={{ marginTop: 18, height: 10, borderRadius: 999, overflow: "hidden", background: c.lightGrey }}>
               <div
@@ -2651,58 +2621,6 @@ function ReviewPageContent() {
                     <Row label="Recovery readiness" value={`${readiness}%`} />
                     <Row label="Blockers" value={String(blockers)} />
                     <Row label="Warnings" value={String(warnings)} />
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    border: `1px solid ${generationMode === "multistage" ? c.greenBorder : c.border}`,
-                    borderRadius: 14,
-                    padding: 12,
-                    background: generationMode === "multistage" ? c.greenBg : c.input,
-                  }}
-                >
-                  <div style={{ fontSize: 12, fontWeight: 800, color: c.black, marginBottom: 8 }}>Generation mode</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <button
-                      type="button"
-                      onClick={() => updateGenerationMode("standard")}
-                      disabled={isGenerating}
-                      style={{
-                        border: `1px solid ${generationMode === "standard" ? c.black : c.border}`,
-                        background: generationMode === "standard" ? c.black : c.input,
-                        color: generationMode === "standard" ? c.blackContrast : c.black,
-                        borderRadius: 12,
-                        padding: "9px 8px",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        cursor: isGenerating ? "not-allowed" : "pointer",
-                      }}
-                    >
-                      Standard
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateGenerationMode("multistage")}
-                      disabled={isGenerating}
-                      style={{
-                        border: `1px solid ${generationMode === "multistage" ? c.greenText : c.border}`,
-                        background: generationMode === "multistage" ? c.greenText : c.input,
-                        color: generationMode === "multistage" ? c.blackContrast : c.black,
-                        borderRadius: 12,
-                        padding: "9px 8px",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        cursor: isGenerating ? "not-allowed" : "pointer",
-                      }}
-                    >
-                      Multi-stage beta
-                    </button>
-                  </div>
-                  <div style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.45, color: generationMode === "multistage" ? c.greenText : c.sub }}>
-                    {generationMode === "multistage"
-                      ? "Enhanced mode extracts commercial context before drafting. Standard remains available as fallback."
-                      : "Fast single-pass generation. Use Multi-stage beta for stronger causation and contract reasoning."}
                   </div>
                 </div>
 

@@ -142,9 +142,9 @@ function makeGeneratedEwn(input: {
 
   return {
     narrative: [
-      `During the progression of the Subcontract Works, M O’Brien Civil Engineering Ltd has identified ${issue}${locationText}${dateText}.`,
+      `During the progression of the Subcontract Works, the Subcontractor has identified ${issue}${locationText}${dateText}.`,
       `The matter requires review as it may affect the planned method, sequence, productivity and/or safe delivery of the works. Based on the current information, the known impact is ${impactText}.`,
-      `MOB requires ${actionText} so that the matter can be reviewed, mitigated and progressed without avoidable delay.`,
+      `The Subcontractor requires ${actionText} so that the matter can be reviewed, mitigated and progressed without avoidable delay.`,
       "As it stands, there is a risk that the works cannot proceed as planned and that further time and/or cost impact may arise if the matter is not resolved within a reasonable timeframe.",
       `Supporting records currently include ${evidenceText}.`,
     ].join("\n\n"),
@@ -154,9 +154,9 @@ function makeGeneratedEwn(input: {
       "Potential requirement for further commercial notification should the matter result in a recoverable change or impact.",
     ],
     mitigation: [
-      `MOB requires ${actionText} from the Contractor/design team as soon as reasonably practicable.`,
-      "MOB will continue to maintain records of labour, plant, materials, site constraints, correspondence and instructions relating to the matter.",
-      "Where practical, MOB will seek to mitigate delay and disruption without waiving entitlement to recover any resulting time or cost impact.",
+      `The Subcontractor requires ${actionText} from the Contractor/design team as soon as reasonably practicable.`,
+      "The Subcontractor will continue to maintain records of labour, plant, materials, site constraints, correspondence and instructions relating to the matter.",
+      "Where practical, the Subcontractor will seek to mitigate delay and disruption without waiving entitlement to recover any resulting time or cost impact.",
     ],
   };
 }

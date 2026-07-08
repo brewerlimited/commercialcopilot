@@ -20,3 +20,16 @@ export function displayEventReference(event?: { event_reference?: string | null;
   if (event?.event_number) return buildEventReference(event.contract_type, event.event_number);
   return "Reference pending";
 }
+
+export function displayEventTitle(event?: {
+  title?: string | null;
+  event_reference?: string | null;
+  event_number?: number | null;
+  contract_type?: string | null;
+} | null) {
+  const title = String(event?.title ?? "").trim() || "Untitled CE";
+  const reference = displayEventReference(event);
+  if (!reference || reference === "Reference pending") return title;
+  if (title.toLowerCase().startsWith(reference.toLowerCase())) return title;
+  return `${reference} — ${title}`;
+}

@@ -196,26 +196,25 @@ function Row({
       onMouseEnter={(ev) => {
         if (active) return;
         (ev.currentTarget as HTMLAnchorElement).style.background = c.hoverBg;
-        (ev.currentTarget as HTMLAnchorElement).style.transform = "translateX(1px)";
       }}
       onMouseLeave={(ev) => {
         (ev.currentTarget as HTMLAnchorElement).style.background = active ? c.activeBg : "transparent";
-        (ev.currentTarget as HTMLAnchorElement).style.transform = "translateX(0)";
       }}
       style={{
         display: "flex",
         alignItems: "center",
         gap: 10,
+        minHeight: 42,
         padding: "9px 11px",
         borderRadius: 14,
         textDecoration: "none",
         color: c.text,
         background: active ? c.activeBg : "transparent",
-        transition: "background 140ms ease, transform 140ms ease, color 140ms ease, border-color 140ms ease",
+        transition: "background 140ms ease, color 140ms ease, border-color 140ms ease",
         border: `1px solid ${active ? c.border : "transparent"}`,
       }}
     >
-      {icon ? <span style={{ display: "grid", placeItems: "center", color: c.sub }}>{icon}</span> : null}
+      {icon ? <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", color: c.sub, flex: "0 0 20px" }}>{icon}</span> : null}
       {!collapsed && (
         <span
           style={{
@@ -403,23 +402,32 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               type="button"
               onClick={() => setCollapsed(false)}
               title="Expand sidebar"
-              onMouseEnter={() => setLogoHover(true)}
-              onMouseLeave={() => setLogoHover(false)}
+            onMouseEnter={() => setLogoHover(true)}
+            onMouseLeave={() => setLogoHover(false)}
               style={{
                 width: 46,
                 height: 46,
                 borderRadius: 16,
                 border: `1px solid ${c.border}`,
-                background: logoHover ? c.black : c.panelSolid,
+                background: logoHover ? c.black : "#ffffff",
                 color: logoHover ? c.blackContrast : c.text,
                 display: "grid",
                 placeItems: "center",
                 fontWeight: 800,
                 cursor: "pointer",
-                transition: "background 160ms ease, color 160ms ease, transform 160ms ease, border-color 160ms ease",
+                transition: "background 160ms ease, color 160ms ease, border-color 160ms ease",
               }}
             >
-              {logoHover ? <Icon name="expand" /> : "CC"}
+              {logoHover ? (
+                <Icon name="expand" />
+              ) : (
+                <img
+                  src="/brand/ccp-mark-navy-transparent.png"
+                  alt=""
+                  aria-hidden
+                  style={{ width: 24, height: 24, objectFit: "contain", display: "block" }}
+                />
+              )}
             </button>
           ) : (
             <>
@@ -428,11 +436,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 title="Commercial Co-Pilot"
                 onMouseEnter={(ev) => {
                   (ev.currentTarget as HTMLAnchorElement).style.background = c.hoverBg;
-                  (ev.currentTarget as HTMLAnchorElement).style.transform = "translateX(1px)";
                 }}
                 onMouseLeave={(ev) => {
                   (ev.currentTarget as HTMLAnchorElement).style.background = "transparent";
-                  (ev.currentTarget as HTMLAnchorElement).style.transform = "translateX(0)";
                 }}
                 style={{
                   display: "flex",
@@ -443,7 +449,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   minWidth: 0,
                   padding: "4px 6px",
                   borderRadius: 16,
-                  transition: "background 140ms ease, transform 140ms ease",
+                  transition: "background 140ms ease",
                 }}
               >
                 <div
@@ -453,15 +459,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                     height: 34,
                     borderRadius: 12,
                     border: `1px solid ${c.border}`,
-                    background: c.panelSolid,
+                    background: "#ffffff",
                     display: "grid",
                     placeItems: "center",
-                    fontWeight: 700,
-                    color: c.text,
                     flex: "0 0 auto",
                   }}
                 >
-                  CC
+                  <img
+                    src="/brand/ccp-mark-navy-transparent.png"
+                    alt=""
+                    aria-hidden
+                    style={{ width: 21, height: 21, objectFit: "contain", display: "block" }}
+                  />
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: 0, lineHeight: 1.12 }}>Commercial</div>
@@ -474,11 +483,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 title="Collapse sidebar"
                 onMouseEnter={(ev) => {
                   (ev.currentTarget as HTMLButtonElement).style.background = c.hoverBg;
-                  (ev.currentTarget as HTMLButtonElement).style.transform = "translateX(1px)";
                 }}
                 onMouseLeave={(ev) => {
                   (ev.currentTarget as HTMLButtonElement).style.background = c.panelSolid;
-                  (ev.currentTarget as HTMLButtonElement).style.transform = "translateX(0)";
                 }}
                 style={{
                   width: 32,
@@ -491,7 +498,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   display: "grid",
                   placeItems: "center",
                   flex: "0 0 auto",
-                  transition: "background 140ms ease, border-color 140ms ease, transform 140ms ease",
+                  transition: "background 140ms ease, border-color 140ms ease",
                 }}
               >
                 <Icon name="collapse" />
@@ -556,12 +563,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 style={{
                   width: "100%",
                   padding: "10px 10px 10px 34px",
+                  height: 42,
                   borderRadius: 12,
                   border: `1px solid ${c.border}`,
                   outline: "none",
                   background: c.panelSolid,
                   color: c.text,
                   fontWeight: 700,
+                  fontSize: 13,
                 }}
               />
             </div>
@@ -599,7 +608,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       display: "flex",
                       alignItems: "center",
                       gap: 0,
-                      padding: "11px 12px",
+                      minHeight: 58,
+                      padding: "10px 12px",
                       borderRadius: 16,
                       textDecoration: "none",
                       color: c.text,
@@ -608,15 +618,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       maxWidth: "100%",
                       overflow: "hidden",
                       border: `1px solid ${active ? c.border : "transparent"}`,
+                      transition: "background 140ms ease, border-color 140ms ease",
                     }}
                     onMouseEnter={(ev) => {
                       if (active) return;
                       ev.currentTarget.style.background = c.hoverBg;
-                      ev.currentTarget.style.transform = "translateX(1px)";
                     }}
                     onMouseLeave={(ev) => {
                       ev.currentTarget.style.background = active ? c.activeBg : "transparent";
-                      ev.currentTarget.style.transform = "translateX(0)";
                     }}
                   >
                     {!collapsed && (
@@ -671,6 +680,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       display: "flex",
                       alignItems: "center",
                       gap: 0,
+                      minHeight: 56,
                       padding: "10px 12px",
                       borderRadius: 16,
                       textDecoration: "none",
@@ -680,15 +690,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       maxWidth: "100%",
                       overflow: "hidden",
                       border: `1px solid ${active ? c.border : "transparent"}`,
+                      transition: "background 140ms ease, border-color 140ms ease",
                     }}
                     onMouseEnter={(ev) => {
                       if (active) return;
                       ev.currentTarget.style.background = c.hoverBg;
-                      (ev.currentTarget as HTMLAnchorElement).style.transform = "translateX(1px)";
                     }}
                     onMouseLeave={(ev) => {
                       ev.currentTarget.style.background = active ? c.activeBg : "transparent";
-                      ev.currentTarget.style.transform = "translateX(0)";
                     }}
                   >
                     <div style={{ minWidth: 0, flex: 1 }}>

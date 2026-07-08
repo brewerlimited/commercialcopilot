@@ -8,6 +8,7 @@ export type CommercialStatus =
   | "rejected"
   | "accepted"
   | "paid"
+  | "void"
   | "complete";
 
 export type PaymentStatus =
@@ -26,6 +27,7 @@ export const COMMERCIAL_STATUS_OPTIONS: { value: CommercialStatus; label: string
   { value: "rejected", label: "Rejected" },
   { value: "accepted", label: "Accepted" },
   { value: "paid", label: "Paid" },
+  { value: "void", label: "Void" },
 ];
 
 export const PAYMENT_STATUS_OPTIONS: { value: PaymentStatus; label: string }[] = [
@@ -42,7 +44,7 @@ export function normaliseCommercialStatus(status?: string | null): CommercialSta
   if (s === "in_review") return "review";
   if (s === "ready_to_submit") return "ready";
   if (s === "complete") return "complete";
-  if (["draft", "review", "ready", "submitted", "rejected", "accepted", "paid"].includes(s)) {
+  if (["draft", "review", "ready", "submitted", "rejected", "accepted", "paid", "void"].includes(s)) {
     return s as CommercialStatus;
   }
   return "draft";
@@ -64,6 +66,7 @@ export function getAllowedCommercialStatusOptions(status?: string | null) {
     rejected: ["rejected", "submitted", "accepted"],
     accepted: ["accepted", "rejected", "paid"],
     paid: ["paid"],
+    void: ["void", "draft", "review"],
     complete: ["paid"],
   };
   const values = new Set<CommercialStatus>(allowed[current] || [current]);

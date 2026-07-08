@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const eventId = String(body?.eventId || body?.event_id || "").trim();
     const requestedForceGenerate = Boolean(body?.forceGenerateMode);
-    const generationMode = body?.generationMode === "multistage" ? "multistage" : "standard";
+    const generationMode = "multistage";
     const pack = body?.pack || {};
 
     if (!isUuid(eventId)) {

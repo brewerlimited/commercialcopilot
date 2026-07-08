@@ -49,7 +49,7 @@ Rules:
 - Use clear paragraphs, not bullet points, for the narrative.
 - Avoid generic AI wording.
 - Avoid unnecessary repetition.
-- Write as if M O’Brien Civil Engineering Ltd is giving early warning.
+- Write as if the user's subcontractor business is giving early warning. If no company name is provided, use "the Subcontractor" rather than inventing a real company.
 - Keep the output concise but commercially useful.
 - Return valid JSON only.
 
@@ -57,7 +57,7 @@ Return this JSON shape exactly:
 {
   "narrative": "full EWN narrative as paragraphs",
   "consequences": ["commercial/programme consequence", "delivery/safety/productivity consequence", "record/next step consequence"],
-  "mitigation": ["required contractor/design team action", "MOB mitigation/record keeping action", "follow-up action if unresolved"]
+  "mitigation": ["required contractor/design team action", "subcontractor mitigation/record keeping action", "follow-up action if unresolved"]
 }`;
 
 function cleanString(value: any) {
@@ -96,8 +96,8 @@ export function validateGeneratedEwn(value: any): GeneratedEwn {
     ]),
     mitigation: cleanArray(value.mitigation, [
       "The contractor/design team should provide the required confirmation, instruction or design response as soon as reasonably practicable.",
-      "MOB will continue to maintain records of labour, plant, materials, constraints and correspondence relating to the matter.",
-      "If the matter results in a change or recoverable impact, MOB may convert the EWN into a CE for formal assessment.",
+      "The Subcontractor will continue to maintain records of labour, plant, materials, constraints and correspondence relating to the matter.",
+      "If the matter results in a change or recoverable impact, the Subcontractor may convert the EWN into a CE for formal assessment.",
     ]),
   };
 }
@@ -115,9 +115,9 @@ export function makeTemplateEwn(input: EwnDraftInput): GeneratedEwn {
   const evidence = cleanString(input.evidence) || "site records, photographs, allocation sheets, correspondence and associated records";
   const project = cleanString(input.projectName);
 
-  const opening = `During the progression of the Subcontract Works${project ? ` on ${project}` : ""}, M O’Brien Civil Engineering Ltd has identified ${issue}${location ? ` at ${location}` : ""}${date ? ` on ${date}` : ""}.`;
+  const opening = `During the progression of the Subcontract Works${project ? ` on ${project}` : ""}, the Subcontractor has identified ${issue}${location ? ` at ${location}` : ""}${date ? ` on ${date}` : ""}.`;
   const detail = `The matter requires review as it may affect the planned method, sequence, productivity and/or safe delivery of the works. Based on the current information, the known impact is ${impact}.`;
-  const action = `MOB requires ${requiredAction} so that the matter can be reviewed, mitigated and progressed without avoidable delay.`;
+  const action = `The Subcontractor requires ${requiredAction} so that the matter can be reviewed, mitigated and progressed without avoidable delay.`;
   const risk = `As it stands, there is a risk that the works cannot proceed as planned and that further time and/or cost impact may arise if the matter is not resolved within a reasonable timeframe.`;
   const records = `Supporting records currently include ${evidence}.`;
 
@@ -129,9 +129,9 @@ export function makeTemplateEwn(input: EwnDraftInput): GeneratedEwn {
       "Potential requirement for further commercial notification should the matter result in a recoverable change or impact.",
     ],
     mitigation: [
-      `MOB requires ${requiredAction} from the Contractor/design team as soon as reasonably practicable.`,
-      "MOB will continue to maintain records of labour, plant, materials, site constraints, correspondence and instructions relating to the matter.",
-      "Where practical, MOB will seek to mitigate delay and disruption without waiving entitlement to recover any resulting time or cost impact.",
+      `The Subcontractor requires ${requiredAction} from the Contractor/design team as soon as reasonably practicable.`,
+      "The Subcontractor will continue to maintain records of labour, plant, materials, site constraints, correspondence and instructions relating to the matter.",
+      "Where practical, the Subcontractor will seek to mitigate delay and disruption without waiving entitlement to recover any resulting time or cost impact.",
     ],
   };
 }

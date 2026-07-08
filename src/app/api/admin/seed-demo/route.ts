@@ -472,7 +472,7 @@ function packOutput(e: DemoEvent) {
 
 const EVENTS: DemoEvent[] = [
   {
-    title: "CE 001 - Revised drainage run and invert levels at North Gate",
+    title: "Revised drainage run and invert levels at North Gate",
     project_name: "Ainsworth Energy Recovery Facility",
     main_contractor: "Morrison Infrastructure",
     contract_type: "nec4_ecs_option_b",
@@ -518,7 +518,7 @@ const EVENTS: DemoEvent[] = [
     ],
   },
   {
-    title: "CE 002 - Standing time due to delayed permit for service corridor excavation",
+    title: "Standing time due to delayed permit for service corridor excavation",
     project_name: "Ainsworth Energy Recovery Facility",
     main_contractor: "Morrison Infrastructure",
     contract_type: "nec4_ecs_option_b",
@@ -564,7 +564,7 @@ const EVENTS: DemoEvent[] = [
     ],
   },
   {
-    title: "CE 003 - Additional concrete breakout to transformer base",
+    title: "Additional concrete breakout to transformer base",
     project_name: "Ainsworth Energy Recovery Facility",
     main_contractor: "Morrison Infrastructure",
     contract_type: "nec4_ecs_option_b",
@@ -606,7 +606,7 @@ const EVENTS: DemoEvent[] = [
     ],
   },
   {
-    title: "VAR 001 - Late partition set-out change to Level 04 apartments",
+    title: "Late partition set-out change to Level 04 apartments",
     project_name: "Westgate Residential Block C",
     main_contractor: "Harwood Developments",
     contract_type: "jct_d_and_b_2016",
@@ -649,7 +649,7 @@ const EVENTS: DemoEvent[] = [
     ],
   },
   {
-    title: "VAR 002 - Façade bracket clashes with revised steel edge angle",
+    title: "Façade bracket clashes with revised steel edge angle",
     project_name: "Westgate Residential Block C",
     main_contractor: "Harwood Developments",
     contract_type: "jct_d_and_b_2016",
@@ -693,7 +693,7 @@ const EVENTS: DemoEvent[] = [
     ],
   },
   {
-    title: "VAR 003 - Out of sequence fire stopping to risers before inspection",
+    title: "Out of sequence fire stopping to risers before inspection",
     project_name: "Westgate Residential Block C",
     main_contractor: "Harwood Developments",
     contract_type: "jct_d_and_b_2016",
@@ -735,13 +735,13 @@ const EVENTS: DemoEvent[] = [
     ],
   },
   {
-    title: "CE 010 - ST94 steel rehandling and delayed measured works",
+    title: "ST94 steel rehandling and delayed measured works",
     project_name: "Ainsworth Energy Recovery Facility",
     main_contractor: "Morrison Infrastructure",
     contract_type: "nec4_ecs_option_b",
     contract_source: "standard_logic",
     event_number: 10,
-    event_reference: "CE010",
+    event_reference: "CE 010",
     status: "draft",
     payment_status: "not_applied",
     event_date: "2025-11-24",
@@ -876,7 +876,7 @@ const DEMO_EVENT_REALISM: Record<string, Partial<DemoEvent>> = {
     last_action_date: demoDate(-1),
     generated_pack: false,
   },
-  "CE010": {
+  "CE 010": {
     status: "submitted",
     payment_status: "submitted_for_payment",
     event_date: demoDate(-38),

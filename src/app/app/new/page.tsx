@@ -420,12 +420,27 @@ export default function NewEvent() {
       linkedProjectId = (projectRes.data as any)?.id as string;
       setProjectId(linkedProjectId);
 
-      const existingRefs = await (supabase as any).from("events")
-        .select("event_number,event_reference")
-        .eq("user_id", user.id)
-        .eq("project_name", cleanProjectName)
-        .order("event_number", { ascending: false })
-        .limit(1);
+      let existingRefs = linkedProjectId
+        ? await (supabase as any).from("events")
+            .select("event_number,event_reference")
+            .eq("user_id", user.id)
+            .eq("project_id", linkedProjectId)
+            .order("event_number", { ascending: false })
+            .limit(1)
+        : null;
+
+      if (!existingRefs || existingRefs.error) {
+        const canFallback = !existingRefs || /project_id|schema cache|column|does not exist/i.test(String(existingRefs.error?.message || ""));
+        if (!canFallback && existingRefs.error) throw existingRefs.error;
+
+        existingRefs = await (supabase as any).from("events")
+          .select("event_number,event_reference")
+          .eq("user_id", user.id)
+          .eq("project_name", cleanProjectName)
+          .eq("main_contractor", cleanMainContractor)
+          .order("event_number", { ascending: false })
+          .limit(1);
+      }
 
       if (existingRefs.error) throw existingRefs.error;
 

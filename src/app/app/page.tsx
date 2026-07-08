@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getContractLabel } from "@/lib/contracts";
-import { displayEventReference } from "@/lib/eventReference";
+import { displayEventReference, displayEventTitle } from "@/lib/eventReference";
 import { readFinalTotal, recalculateEventFinancialSummary } from "@/lib/financialSummary";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
 import {
@@ -303,6 +303,7 @@ function paymentActionDetail(event: EventRow, overdue: boolean) {
 
 function statusTone(status?: string | null) {
   const s = normaliseCommercialStatus(status);
+  if (s === "void") return { bg: c.soft, bd: c.border, tx: c.sub };
   if (s === "paid" || s === "accepted" || s === "complete") return { bg: c.greenBg, bd: c.greenBd, tx: c.greenTx };
   if (s === "submitted") return { bg: c.blueBg, bd: c.blueBd, tx: c.blueTx };
   if (s === "rejected") return { bg: c.redBg, bd: c.redBd, tx: c.redTx };
@@ -310,10 +311,13 @@ function statusTone(status?: string | null) {
   return { bg: c.card, bd: c.border, tx: c.sub };
 }
 
+function isVoided(status?: string | null) {
+  return normaliseCommercialStatus(status) === "void";
+}
 
 function isCommerciallyClosed(status?: string | null, paymentStatus?: string | null) {
   const s = normaliseCommercialStatus(status);
-  return s === "paid" || s === "complete" || getPaymentState(paymentStatus) === "paid";
+  return s === "paid" || s === "complete" || s === "void" || getPaymentState(paymentStatus) === "paid";
 }
 
 function isSubmissionOutstanding(status?: string | null) {
@@ -362,7 +366,7 @@ function nextTrackingState(next: TrackingUpdate) {
 
     if (status === "paid" || status === "complete") patch.payment_status = "paid";
     if ((status === "submitted" || status === "accepted") && !paymentWasExplicitlyChanged) patch.payment_status = "submitted_for_payment";
-    if ((status === "draft" || status === "review" || status === "ready" || status === "rejected") && !paymentWasExplicitlyChanged) patch.payment_status = "not_applied";
+    if ((status === "draft" || status === "review" || status === "ready" || status === "rejected" || status === "void") && !paymentWasExplicitlyChanged) patch.payment_status = "not_applied";
   }
   if (patch.payment_status === "paid" && !patch.status) patch.status = "paid";
   return patch;
@@ -480,6 +484,9 @@ function paymentTrackingHref(eventId: string) {
 
 function registerActionFor(event: EventRow) {
   const status = normaliseCommercialStatus(event.status);
+  if (status === "void") {
+    return { label: "View record", href: `/app/event/${event.id}/review` };
+  }
   if (isCommerciallyClosed(status, event.payment_status)) {
     return { label: "View record", href: `/app/event/${event.id}/review` };
   }
@@ -494,6 +501,7 @@ function registerActionFor(event: EventRow) {
 
 function registerStateLine(event: EventRow) {
   const status = normaliseCommercialStatus(event.status);
+  if (status === "void") return "Void — kept for audit, excluded from live recovery totals.";
   if (isCommerciallyClosed(status, event.payment_status)) return "Paid — removed from live unpaid and overdue actions.";
   if (status === "rejected") return "Rejected — rebuttal workflow is the next commercial action.";
   if (status === "accepted") return "Accepted — awaiting payment until marked paid.";
@@ -609,7 +617,7 @@ function CompactStatusCard({ label, value, tone = "default" }: { label: string; 
 }
 
 function focusActionFor(row: { event: EventRow; value: number | null; status: string; timeRisk: ReturnType<typeof calculateTimeRisk> }): FocusAction | null {
-  const title = row.event.title || "Untitled CE";
+  const title = displayEventTitle(row.event);
 
   if (row.status === "rejected") {
     return {
@@ -919,6 +927,11 @@ function AppHomeContent() {
     });
   }, [filteredEvents, eventValues]);
 
+  const activeEnriched = useMemo(
+    () => enriched.filter((row) => !isVoided(row.event.status)),
+    [enriched]
+  );
+
   const groupedRegister = useMemo(() => {
     const groups = new Map<string, typeof enriched>();
 
@@ -954,10 +967,11 @@ function AppHomeContent() {
   }, [showAll, openTrackingId, groupedRegister.length]);
 
   const totals = useMemo(() => {
-    const total = filteredEvents.length;
-    const drafts = filteredEvents.filter((e) => normaliseCommercialStatus(e.status) === "draft").length;
-    const inReview = filteredEvents.filter((e) => normaliseCommercialStatus(e.status) === "review").length;
-    const ready = filteredEvents.filter((e) => {
+    const activeEvents = filteredEvents.filter((event) => !isVoided(event.status));
+    const total = activeEvents.length;
+    const drafts = activeEvents.filter((e) => normaliseCommercialStatus(e.status) === "draft").length;
+    const inReview = activeEvents.filter((e) => normaliseCommercialStatus(e.status) === "review").length;
+    const ready = activeEvents.filter((e) => {
       const status = normaliseCommercialStatus(e.status);
       return status === "ready" || status === "complete" || status === "submitted" || status === "accepted" || status === "paid";
     }).length;
@@ -965,7 +979,7 @@ function AppHomeContent() {
   }, [filteredEvents]);
 
   const focusAction = useMemo<FocusAction | null>(() => {
-    const openRows = enriched.filter((row) => !isCommerciallyClosed(row.status, row.event.payment_status));
+    const openRows = activeEnriched.filter((row) => !isCommerciallyClosed(row.status, row.event.payment_status));
     const priorityGroups = [
       openRows.filter((row) => isUnpaidCe(row.status, row.event.payment_status)),
       openRows.filter((row) => row.status === "rejected"),
@@ -991,7 +1005,7 @@ function AppHomeContent() {
     }
 
     return null;
-  }, [enriched]);
+  }, [activeEnriched]);
 
   const focusEvent = focusAction?.event ?? null;
 
@@ -1024,7 +1038,7 @@ function AppHomeContent() {
     let paid = 0;
     let notSubmitted = 0;
 
-    for (const row of enriched) {
+    for (const row of activeEnriched) {
       const value = row.value ?? 0;
       const closed = isCommerciallyClosed(row.status, row.event.payment_status);
       const balance = balanceOutstanding(row.event, value);
@@ -1037,7 +1051,7 @@ function AppHomeContent() {
     }
 
     return { totalValue, unpaid, overdue, paid, notSubmitted };
-  }, [enriched]);
+  }, [activeEnriched]);
 
   useEffect(() => {
     let active = true;
@@ -1113,8 +1127,8 @@ function AppHomeContent() {
   const actions = useMemo<DashboardAction[]>(() => {
     const items: DashboardAction[] = [];
 
-    for (const row of enriched) {
-      const title = row.event.title || "Untitled CE";
+    for (const row of activeEnriched) {
+      const title = displayEventTitle(row.event);
       const value = hasCommercialValue(row.value) ? row.value : null;
       const recoveryBalance = isUnpaidCe(row.status, row.event.payment_status) ? balanceOutstanding(row.event, value) : value;
       const closed = isCommerciallyClosed(row.status, row.event.payment_status);
@@ -1240,7 +1254,7 @@ function AppHomeContent() {
         return (b.value ?? 0) - (a.value ?? 0);
       })
       .slice(0, 8);
-  }, [enriched]);
+  }, [activeEnriched]);
 
   function startRename(event: EventRow) {
     setRenamingId(event.id);
@@ -1633,7 +1647,8 @@ function AppHomeContent() {
                           const timeTone = row.timeRisk.state === "overdue" ? actionTone("red") : row.timeRisk.state === "due_soon" ? actionTone("amber") : actionTone("neutral");
                           const primaryAction = registerActionFor(row.event);
                           const isTrackingTarget = openTrackingId === row.event.id;
-                          const paymentEditable = isSubmittedOrAccepted(row.event.status) || isCommerciallyClosed(row.event.status, row.event.payment_status);
+                          const voided = isVoided(row.event.status);
+                          const paymentEditable = !voided && (isSubmittedOrAccepted(row.event.status) || isCommerciallyClosed(row.event.status, row.event.payment_status));
                           const rowBalance = balanceOutstanding(row.event, row.value);
                           return (
                             <div
@@ -1643,11 +1658,12 @@ function AppHomeContent() {
                                 border: `1px solid ${isTrackingTarget ? c.blueBd : c.border}`,
                                 borderRadius: 20,
                                 padding: 16,
-                                background: isTrackingTarget ? c.softBlue : c.card,
+                                background: voided ? c.soft : isTrackingTarget ? c.softBlue : c.card,
                                 display: "grid",
                                 gap: 14,
+                                opacity: voided ? 0.68 : 1,
                                 boxShadow: isTrackingTarget ? "0 0 0 3px rgba(37,99,235,0.08)" : "none",
-                                transition: "background 160ms ease, border-color 160ms ease, box-shadow 160ms ease",
+                                transition: "background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease",
                               }}
                             >
                       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 16, alignItems: "start" }}>
@@ -1664,8 +1680,8 @@ function AppHomeContent() {
                             </div>
                           ) : (
                             <>
-                              <Link href={`/app/event/${row.event.id}`} style={{ color: c.text, textDecoration: "none", fontSize: 15, fontWeight: 650, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {displayEventReference(row.event)} — {row.event.title || "Untitled CE"}
+                              <Link href={`/app/event/${row.event.id}`} style={{ color: voided ? c.sub : c.text, textDecoration: "none", fontSize: 15, fontWeight: 650, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {displayEventTitle(row.event)}
                               </Link>
                               <div style={{ marginTop: 5, fontSize: 12.5, color: c.sub, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", lineHeight: 1.45 }}>
                                 {projectContext(row.event)} • {getContractLabel(row.event.contract_type)}
@@ -1689,9 +1705,11 @@ function AppHomeContent() {
                             <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${st.bd}`, background: st.bg, color: st.tx, fontSize: 11.5, fontWeight: 650 }}>
                               {getCommercialStatusLabel(row.event.status)}
                             </span>
-                            <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${(isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status)).bd}`, background: (isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status)).bg, color: (isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status)).tx, fontSize: 11.5, fontWeight: 650 }}>
-                              {isOverdueCe(row.event) ? "Overdue" : getPaymentStatusLabel(row.event.payment_status)}
-                            </span>
+                            {!voided ? (
+                              <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${(isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status)).bd}`, background: (isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status)).bg, color: (isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status)).tx, fontSize: 11.5, fontWeight: 650 }}>
+                                {isOverdueCe(row.event) ? "Overdue" : getPaymentStatusLabel(row.event.payment_status)}
+                              </span>
+                            ) : null}
                             {!isSubmittedOrAccepted(row.event.status) && !isCommerciallyClosed(row.event.status, row.event.payment_status) ? (
                               <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${timeTone.bd}`, background: row.timeRisk.state === "safe" ? c.card : timeTone.bg, color: timeTone.tx, fontSize: 11.5, fontWeight: 650 }}>
                                 {row.timeRisk.deadline ? row.timeRisk.label : "No event date"}
@@ -1943,6 +1961,23 @@ function AppHomeContent() {
                                 </button>
                               </div>
                             ) : (
+                              <>
+                              <button
+                                onClick={() => void updateRegisterTracking(row.event.id, { status: voided ? "draft" : "void" })}
+                                style={{
+                                  height: 40,
+                                  border: `1px solid ${c.border}`,
+                                  background: voided ? c.input : c.soft,
+                                  color: c.text,
+                                  borderRadius: 12,
+                                  padding: "0 14px",
+                                  fontWeight: 650,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {voided ? "Reinstate CE/VO" : "Void CE/VO"}
+                              </button>
                               <button
                                 onClick={() => {
                                   setDeleteConfirmEventId(row.event.id);
@@ -1963,6 +1998,7 @@ function AppHomeContent() {
                               >
                                 {deletingEventId === row.event.id ? "Deleting..." : "Delete CE/VO"}
                               </button>
+                              </>
                             )}
                             <button onClick={() => startRename(row.event)} style={{ height: 40, border: `1px solid ${c.border}`, background: c.input, color: c.text, borderRadius: 12, padding: "0 14px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}>Rename</button>
                             <Link href={primaryAction.href} style={{ textDecoration: "none", display: "inline-flex" }}>

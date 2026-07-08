@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getContractLabel } from "@/lib/contracts";
-import { displayEventReference } from "@/lib/eventReference";
+import { displayEventTitle } from "@/lib/eventReference";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
 import { normaliseCommercialStatus, normalisePaymentStatus } from "@/lib/commercialControl";
 
@@ -107,6 +107,10 @@ function outstandingValue(event: EventRow) {
   return Math.max(0, assessedValue(event) - paidValue(event));
 }
 
+function isVoided(event: EventRow) {
+  return normaliseCommercialStatus(event.status) === "void";
+}
+
 function projectKey(project: { project_name?: string | null; main_contractor?: string | null }) {
   return `${String(project.project_name ?? "").trim().toLowerCase()}__${String(project.main_contractor ?? "").trim().toLowerCase()}`;
 }
@@ -168,14 +172,15 @@ function statusTone(status?: string | null) {
 }
 
 function nextProjectAction(events: EventRow[], ewns: EwnRow[]) {
-  const overdue = events.filter(isOverdue).sort((a, b) => outstandingValue(b) - outstandingValue(a))[0];
-  if (overdue) return { label: "Chase overdue payment", detail: `${overdue.title || displayEventReference(overdue)} • ${money(outstandingValue(overdue))}`, href: `/app?trackPayment=${overdue.id}`, tone: "red" as const };
+  const activeEvents = events.filter((event) => !isVoided(event));
+  const overdue = activeEvents.filter(isOverdue).sort((a, b) => outstandingValue(b) - outstandingValue(a))[0];
+  if (overdue) return { label: "Chase overdue payment", detail: `${displayEventTitle(overdue)} • ${money(outstandingValue(overdue))}`, href: `/app?trackPayment=${overdue.id}`, tone: "red" as const };
 
   const openEwn = ewns.find((ewn) => ewn.status !== "converted" && ewn.status !== "closed");
   if (openEwn) return { label: "Review open EWN", detail: openEwn.title || "Open early warning", href: `/app/ewns?ewn=${openEwn.id}`, tone: "amber" as const };
 
-  const draft = events.find((event) => ["draft", "review", "ready"].includes(normaliseCommercialStatus(event.status)));
-  if (draft) return { label: "Continue CE pack", detail: draft.title || displayEventReference(draft), href: `/app/event/${draft.id}`, tone: "blue" as const };
+  const draft = activeEvents.find((event) => ["draft", "review", "ready"].includes(normaliseCommercialStatus(event.status)));
+  if (draft) return { label: "Continue CE pack", detail: displayEventTitle(draft), href: `/app/event/${draft.id}`, tone: "blue" as const };
 
   return { label: "Commercially quiet", detail: "No immediate recovery action flagged.", href: "/app/new", tone: "neutral" as const };
 }
@@ -270,14 +275,15 @@ export default function ProjectsPage() {
   const projectSummaries = useMemo(() => {
     return projects.map((project) => {
       const projectEvents = events.filter((event) => eventBelongsToProject(event, project));
+      const activeProjectEvents = projectEvents.filter((event) => !isVoided(event));
       const projectEwns = ewns.filter((ewn) => ewnBelongsToProject(ewn, project));
-      const recoverable = projectEvents.reduce((sum, event) => sum + readTotal(event.event_financial_summary), 0);
-      const submitted = projectEvents
+      const recoverable = activeProjectEvents.reduce((sum, event) => sum + readTotal(event.event_financial_summary), 0);
+      const submitted = activeProjectEvents
         .filter((event) => ["submitted", "accepted", "paid"].includes(normaliseCommercialStatus(event.status)))
         .reduce((sum, event) => sum + assessedValue(event), 0);
-      const paid = projectEvents.reduce((sum, event) => sum + paidValue(event), 0);
-      const outstanding = projectEvents.reduce((sum, event) => sum + outstandingValue(event), 0);
-      const overdue = projectEvents.filter(isOverdue);
+      const paid = activeProjectEvents.reduce((sum, event) => sum + paidValue(event), 0);
+      const outstanding = activeProjectEvents.reduce((sum, event) => sum + outstandingValue(event), 0);
+      const overdue = activeProjectEvents.filter(isOverdue);
       return {
         project,
         events: projectEvents,
