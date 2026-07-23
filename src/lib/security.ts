@@ -1,8 +1,40 @@
 import type { User } from "@supabase/supabase-js";
 
+const STALE_REFRESH_TOKEN_MESSAGES = [
+  "invalid refresh token",
+  "refresh token not found",
+  "refresh token already used",
+  "session not found",
+];
+
+export function isStaleSupabaseAuthError(error: unknown) {
+  const message = error instanceof Error ? error.message : String((error as any)?.message ?? error ?? "");
+  const name = String((error as any)?.name ?? "");
+  const lower = message.toLowerCase();
+
+  return STALE_REFRESH_TOKEN_MESSAGES.some((knownMessage) => lower.includes(knownMessage)) || (
+    name === "AuthApiError" &&
+    lower.includes("refresh")
+  );
+}
+
+export async function clearStaleSupabaseSession(supabase: any) {
+  try {
+    await supabase.auth.signOut({ scope: "local" });
+  } catch {
+    // The stored refresh token is already invalid, so failure to revoke remotely is expected.
+  }
+}
+
 export async function getRequiredUser(supabase: any): Promise<User> {
   const { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
+  if (error) {
+    if (isStaleSupabaseAuthError(error)) {
+      await clearStaleSupabaseSession(supabase);
+      throw new Error("AUTH_REQUIRED");
+    }
+    throw error;
+  }
   const user = data.session?.user;
   if (!user) throw new Error("AUTH_REQUIRED");
   return user;

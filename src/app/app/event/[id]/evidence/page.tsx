@@ -6,6 +6,8 @@ import { buildEventStepPath, normalizeRouteParam } from "@/lib/routeParams";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getOwnedEventOrThrow, getRequiredUser, isAuthErrorMessage, isOwnershipErrorMessage } from "@/lib/security";
 import CEProgress from "@/components/CEProgress";
+import CEReadinessRail from "@/components/CEReadinessRail";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
 
 type EvidenceCategory =
   | "instructions"
@@ -141,18 +143,34 @@ function Card({
   title,
   hint,
   children,
+  dragActive,
+  onDragEnter,
+  onDragOver,
+  onDragLeave,
+  onDrop,
 }: {
   title: string;
   hint?: string;
   children: React.ReactNode;
+  dragActive?: boolean;
+  onDragEnter?: React.DragEventHandler<HTMLElement>;
+  onDragOver?: React.DragEventHandler<HTMLElement>;
+  onDragLeave?: React.DragEventHandler<HTMLElement>;
+  onDrop?: React.DragEventHandler<HTMLElement>;
 }) {
   return (
     <section
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
       style={{
         background: c.card,
-        border: `1px solid ${c.border}`,
+        border: `1px solid ${dragActive ? c.greenBorder : c.border}`,
         borderRadius: 18,
         padding: 20,
+        boxShadow: dragActive ? "0 0 0 4px rgba(16, 185, 129, 0.08)" : undefined,
+        transition: "border-color 160ms ease, box-shadow 160ms ease",
       }}
     >
       <h2
@@ -287,14 +305,17 @@ function DropZone({
     <div
       onDragOver={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         setDrag(true);
       }}
       onDragLeave={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         setDrag(false);
       }}
       onDrop={(e) => {
         e.preventDefault();
+        e.stopPropagation();
         setDrag(false);
         onDropFiles(e.dataTransfer.files);
       }}
@@ -376,6 +397,7 @@ export default function EvidencePage() {
   const [savingMetaId, setSavingMetaId] = useState<string | null>(null);
   const [previews, setPreviews] = useState<PreviewMap>({});
   const [openNotesFor, setOpenNotesFor] = useState<Record<string, boolean>>({});
+  const [dragCategory, setDragCategory] = useState<EvidenceCategory | null>(null);
   const lastSavedSnapshotRef = useRef<string>("");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "unsaved" | "error">("saved");
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
@@ -524,6 +546,11 @@ export default function EvidencePage() {
     ];
   }, [grouped]);
 
+  const evidenceReadiness = useMemo(() => {
+    const total = checklist.length || 1;
+    return Math.round((checklist.filter((item) => item.ok).length / total) * 100);
+  }, [checklist]);
+
   async function handleFiles(category: EvidenceCategory, picked: FileList | null) {
     if (!picked || picked.length === 0 || !eventId) return;
 
@@ -536,7 +563,8 @@ export default function EvidencePage() {
       const userId = user.id;
       await getOwnedEventOrThrow(supabase, eventId, userId);
 
-      for (const file of Array.from(picked)) {
+      const files = Array.from(picked);
+      for (const file of files) {
         const safeName = file.name.replace(/[^\w.\- ]+/g, "_");
         const path = `${userId}/${eventId}/${category}/${Date.now()}-${safeName}`;
 
@@ -562,6 +590,12 @@ export default function EvidencePage() {
         if (ins.error) throw ins.error;
       }
 
+      void trackAnalyticsWithUser(supabase, "evidence_uploaded", {
+        event_id: eventId,
+        category,
+        file_count: files.length,
+      });
+
       await load();
     } catch (e: any) {
       setError(e?.message ?? "Failed to upload evidence");
@@ -570,6 +604,36 @@ export default function EvidencePage() {
       const input = inputRefs.current[category];
       if (input) input.value = "";
     }
+  }
+
+  function handleSectionDragEnter(category: EvidenceCategory, e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    if (busyCategory) return;
+    setDragCategory(category);
+  }
+
+  function handleSectionDragOver(category: EvidenceCategory, e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    if (busyCategory) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    e.dataTransfer.dropEffect = "copy";
+    setDragCategory(category);
+  }
+
+  function handleSectionDragLeave(category: EvidenceCategory, e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    const nextTarget = e.relatedTarget;
+    if (nextTarget instanceof Node && e.currentTarget.contains(nextTarget)) return;
+    if (dragCategory === category) setDragCategory(null);
+  }
+
+  function handleSectionDrop(category: EvidenceCategory, e: React.DragEvent<HTMLElement>) {
+    e.preventDefault();
+    setDragCategory(null);
+    if (busyCategory) return;
+    void handleFiles(category, e.dataTransfer.files);
   }
 
   async function removeFile(file: EventFile) {
@@ -661,12 +725,12 @@ export default function EvidencePage() {
 
   return (
     <div style={{ background: c.bg, minHeight: "100vh" }}>
-      <div style={{ padding: "22px 18px", maxWidth: 1280, margin: "0 auto" }}>
+      <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 380px",
-            gap: 20,
+            gridTemplateColumns: "minmax(0, 1fr) 340px",
+            gap: 24,
             alignItems: "start",
           }}
         >
@@ -749,6 +813,10 @@ export default function EvidencePage() {
                   <span style={{ fontSize: 12, color: c.sub }}>Autosave on</span>
                 )}
               </div>
+
+              <div style={{ marginTop: 18 }}>
+                <CEProgress eventId={eventId} currentStep="evidence" />
+              </div>
             </div>
 
             {error ? (
@@ -772,7 +840,16 @@ export default function EvidencePage() {
               const busy = busyCategory === cat.key;
 
               return (
-                <Card key={cat.key} title={cat.title} hint={cat.hint}>
+                <Card
+                  key={cat.key}
+                  title={cat.title}
+                  hint={dragCategory === cat.key ? "Drop files here to add them to this evidence section." : cat.hint}
+                  dragActive={dragCategory === cat.key}
+                  onDragEnter={(e) => handleSectionDragEnter(cat.key, e)}
+                  onDragOver={(e) => handleSectionDragOver(cat.key, e)}
+                  onDragLeave={(e) => handleSectionDragLeave(cat.key, e)}
+                  onDrop={(e) => handleSectionDrop(cat.key, e)}
+                >
                   <HiddenFileInput
                     inputRef={{
                       get current() {
@@ -1081,84 +1158,22 @@ export default function EvidencePage() {
               gap: 18,
             }}
           >
-            <div
-              style={{
-                border: `1px solid ${c.border}`,
-                borderRadius: 12,
-                padding: "14px 16px",
-                background: c.card,
-              }}
-            >
-              <CEProgress eventId={eventId} currentStep="evidence" />
-            </div>
+            <CEReadinessRail
+              readiness={evidenceReadiness}
+              readinessLabel={evidenceReadiness >= 80 ? "Evidence strong" : evidenceReadiness > 0 ? "Building support" : "Just started"}
+              rows={checklist.map((item) => ({
+                label: item.label,
+                value: item.ok ? "Uploaded" : "Missing",
+              }))}
+              coach="Evidence is stronger when each record is dated, described and linked back to the issue. Add notes as you upload so the pack can explain why each record matters."
+              nextCopy="Once the evidence support is in place, move to resources and build the labour, plant, material and cost support."
+              primaryHref={buildEventStepPath(eventId, "resources")}
+              primaryLabel="Continue to Resources"
+              secondaryHref={buildEventStepPath(eventId, "details")}
+              secondaryLabel="Back to Basis of Change"
+              backHref="/app"
+            />
 
-            <SidebarCard title="Evidence completeness">
-              <div style={{ display: "grid", gap: 10 }}>
-                {checklist.map((item) => (
-                  <div
-                    key={item.label}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      padding: "10px 12px",
-                      borderRadius: 12,
-                      border: `1px solid ${c.border}`,
-                      background: c.input,
-                    }}
-                  >
-                    <span style={{ fontSize: 13, fontWeight: 600, color: c.black }}>
-                      {item.label}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: item.ok ? c.greenText : c.amberText,
-                      }}
-                    >
-                      {item.ok ? "Uploaded" : "Missing"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </SidebarCard>
-
-            <SidebarCard title="Next step">
-              <div style={{ display: "grid", gap: 10 }}>
-                <div>
-                  Once evidence is in, move on to the resource build-up while the event is still clear
-                  in your mind.
-                </div>
-
-                <SmallBtn type="button" onClick={() => router.push(buildEventStepPath(eventId, "details"))}>
-                  Back to change details
-                </SmallBtn>
-
-                <SmallBtn
-                  type="button"
-                  onClick={() => router.push(buildEventStepPath(eventId, "resources"))}
-                  style={{
-                    background: c.black,
-                    color: c.blackContrast,
-                    borderColor: c.black,
-                  }}
-                >
-                  Continue to resources
-                </SmallBtn>
-
-                <SmallBtn
-                  type="button"
-                  onClick={() => router.push(`/app`)}
-                  style={{
-                    background: c.lightGrey,
-                  }}
-                >
-                  Back to dashboard
-                </SmallBtn>
-              </div>
-            </SidebarCard>
           </div>
         </div>
 

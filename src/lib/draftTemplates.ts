@@ -1,6 +1,6 @@
 import { getContractFamily, type ContractFamily } from "@/lib/contracts";
 
-export type DraftTemplateKey = "NEC_STANDARD" | "JCT_STANDARD";
+export type DraftTemplateKey = "NEC_STANDARD" | "JCT_STANDARD" | "BESPOKE_STANDARD";
 
 export type DraftSectionTemplate = {
   key: string;
@@ -46,7 +46,25 @@ export const JCT_STANDARD_TEMPLATE: DraftTemplate = {
   ],
 };
 
+export const BESPOKE_STANDARD_TEMPLATE: DraftTemplate = {
+  key: "BESPOKE_STANDARD",
+  contractFamily: "BESPOKE",
+  title: "Bespoke / other contract draft",
+  sections: [
+    { key: "background", label: "Background" },
+    { key: "change_to_contract_basis", label: "Change to Contract Basis" },
+    { key: "effect_on_defined_cost", label: "Effect on Recoverable Cost" },
+    { key: "effect_on_programme", label: "Effect on Programme" },
+    { key: "commercial_impact", label: "Commercial Impact" },
+    { key: "contractual_position", label: "Contractual Position" },
+    { key: "assumptions", label: "Assumptions" },
+    { key: "conclusion", label: "Conclusion" },
+  ],
+};
+
 export function getDraftTemplateForContractType(contractType?: string | null): DraftTemplate {
   const family = getContractFamily(contractType);
-  return family === "JCT" ? JCT_STANDARD_TEMPLATE : NEC_STANDARD_TEMPLATE;
+  if (family === "NEC") return NEC_STANDARD_TEMPLATE;
+  if (family === "JCT") return JCT_STANDARD_TEMPLATE;
+  return BESPOKE_STANDARD_TEMPLATE;
 }

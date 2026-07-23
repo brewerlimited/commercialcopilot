@@ -10,6 +10,7 @@ export type CompanyProfile = {
   phone?: string | null;
   vat_number?: string | null;
   company_registration_number?: string | null;
+  trade_profile?: string | null;
 };
 
 export function cleanCompanyProfile(profile?: CompanyProfile | null): CompanyProfile {
@@ -25,6 +26,7 @@ export function cleanCompanyProfile(profile?: CompanyProfile | null): CompanyPro
     phone: profile?.phone || "",
     vat_number: profile?.vat_number || "",
     company_registration_number: profile?.company_registration_number || "",
+    trade_profile: profile?.trade_profile || "general",
   };
 }
 

@@ -1428,6 +1428,8 @@ export async function POST(req: NextRequest) {
       credits_remaining: 3,
       ewn_credits_remaining: 20,
       ewn_credits_limit: 20,
+      account_status: "trial_active",
+      approved_at: now,
       updated_at: now,
     }], { onConflict: "id" }, "profiles"));
 

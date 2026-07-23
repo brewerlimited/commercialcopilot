@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { DEFAULT_MONTHLY_CREDITS } from "@/lib/billing";
+import { recordServerAnalyticsEvent } from "@/lib/serverAnalytics";
 
 export const dynamic = "force-dynamic";
 
@@ -209,6 +210,18 @@ export async function POST(req: NextRequest) {
             raw_payload: session,
           });
 
+          await recordServerAnalyticsEvent(admin, {
+            userId,
+            eventName: "additional_credits_purchased",
+            pagePath: "/app/billing",
+            metadata: {
+              stripe_event_id: event.id,
+              credits,
+              amount: typeof session.amount_total === "number" ? session.amount_total / 100 : 0,
+              currency: session.currency || "gbp",
+            },
+          });
+
           break;
         }
 
@@ -220,6 +233,8 @@ export async function POST(req: NextRequest) {
                 stripe_customer_id: stripeCustomerId,
                 stripe_subscription_id: stripeSubscriptionId,
                 subscription_status: "active",
+                account_status: "active",
+                approved_at: new Date().toISOString(),
                 plan_type: "pro_monthly",
                 updated_at: new Date().toISOString(),
               },
@@ -239,6 +254,18 @@ export async function POST(req: NextRequest) {
           raw_payload: session,
         });
 
+        await recordServerAnalyticsEvent(admin, {
+          userId,
+          eventName: "subscription_started",
+          pagePath: "/app/billing",
+          metadata: {
+            stripe_event_id: event.id,
+            stripe_customer_id: stripeCustomerId,
+            stripe_subscription_id: stripeSubscriptionId,
+            status: "checkout_completed",
+          },
+        });
+
         break;
       }
 
@@ -253,6 +280,8 @@ export async function POST(req: NextRequest) {
           const { error } = await (admin as any).from("profiles")
             .update({
               subscription_status: "active",
+              account_status: "active",
+              approved_at: new Date().toISOString(),
               plan_type: "pro_monthly",
               stripe_customer_id: stripeCustomerId,
               stripe_subscription_id: stripeSubscriptionId,
@@ -279,6 +308,19 @@ export async function POST(req: NextRequest) {
           raw_payload: invoice,
         });
 
+        await recordServerAnalyticsEvent(admin, {
+          userId: profile?.id || null,
+          eventName: "subscription_invoice_paid",
+          pagePath: "/app/billing",
+          metadata: {
+            stripe_event_id: event.id,
+            stripe_invoice_id: invoice.id,
+            stripe_subscription_id: stripeSubscriptionId,
+            amount: typeof invoice.amount_paid === "number" ? invoice.amount_paid / 100 : 0,
+            currency: invoice.currency || "gbp",
+          },
+        });
+
         break;
       }
 
@@ -291,10 +333,13 @@ export async function POST(req: NextRequest) {
           ? new Date(subscriptionWithPeriod.current_period_end * 1000).toISOString()
           : null;
         const subscriptionStatus = event.type === "customer.subscription.deleted" ? "canceled" : subscription.status;
+        const accountStatus = subscriptionStatus === "active" || subscriptionStatus === "trialing" ? "active" : "pending_activation";
 
         const { error } = await (admin as any).from("profiles")
           .update({
             subscription_status: subscriptionStatus,
+            account_status: accountStatus,
+            approved_at: accountStatus === "active" ? new Date().toISOString() : null,
             stripe_customer_id: stripeCustomerId,
             stripe_subscription_id: subscription.id,
             current_period_end: currentPeriodEnd,
@@ -311,6 +356,17 @@ export async function POST(req: NextRequest) {
           status: subscriptionStatus,
           type: event.type,
           raw_payload: subscription,
+        });
+
+        await recordServerAnalyticsEvent(admin, {
+          eventName: event.type === "customer.subscription.deleted" ? "subscription_cancelled" : "subscription_updated",
+          pagePath: "/app/billing",
+          metadata: {
+            stripe_event_id: event.id,
+            stripe_customer_id: stripeCustomerId,
+            stripe_subscription_id: subscription.id,
+            status: subscriptionStatus,
+          },
         });
 
         break;

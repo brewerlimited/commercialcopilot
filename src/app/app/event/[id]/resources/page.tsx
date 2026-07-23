@@ -6,6 +6,7 @@ import { buildEventStepPath, normalizeRouteParam } from "@/lib/routeParams";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getOwnedEventOrThrow, getRequiredUser, isAuthErrorMessage, isOwnershipErrorMessage } from "@/lib/security";
 import CEProgress from "@/components/CEProgress";
+import CEReadinessRail from "@/components/CEReadinessRail";
 import { getResourceLibrary } from "@/lib/resourceLibrary";
 import { getCostLabel } from "@/lib/contracts";
 import { recalculateEventFinancialSummary } from "@/lib/financialSummary";
@@ -78,6 +79,9 @@ const c = {
   sub: "var(--text-muted)",
   black: "var(--accent)",
   blackContrast: "var(--accent-contrast)",
+  purple: "var(--purple, #6d4aff)",
+  purpleSoft: "var(--purple-soft, #f3efff)",
+  purpleBorder: "var(--purple-border, #ddd4ff)",
   soft: "var(--surface-soft)",
   redBg: "var(--red-bg)",
   redBorder: "var(--red-border)",
@@ -387,6 +391,13 @@ export default function ResourcesPage() {
     const definedCost = labour + plant + material;
     return { labour, plant, material, definedCost };
   }, [lines]);
+
+  const resourceReadiness = useMemo(() => {
+    if (totals.definedCost > 0 && lines.length >= 3) return 100;
+    if (totals.definedCost > 0) return 70;
+    if (lines.length > 0) return 45;
+    return 20;
+  }, [lines.length, totals.definedCost]);
 
 
   const activityBuckets = useMemo(() => {
@@ -1127,9 +1138,9 @@ export default function ResourcesPage() {
           setActiveTab(tab);
         }}
         style={{
-          border: `1px solid ${c.border}`,
-          background: active ? c.black : c.input,
-          color: active ? c.blackContrast : c.black,
+          border: `1px solid ${active ? c.purpleBorder : c.border}`,
+          background: active ? c.purpleSoft : c.input,
+          color: active ? c.purple : c.black,
           padding: "9px 12px",
           borderRadius: 12,
           fontWeight: 600,
@@ -1154,12 +1165,12 @@ export default function ResourcesPage() {
 
   return (
     <div style={{ background: c.bg, minHeight: "100vh" }}>
-      <div style={{ padding: "22px 18px", maxWidth: 1280, margin: "0 auto" }}>
+      <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: viewportWidth < 1180 ? "minmax(0, 1fr)" : "minmax(0, 1fr) 380px",
-            gap: 20,
+            gridTemplateColumns: viewportWidth < 1180 ? "minmax(0, 1fr)" : "minmax(0, 1fr) 340px",
+            gap: 24,
             alignItems: "start",
           }}
         >
@@ -1241,6 +1252,10 @@ export default function ResourcesPage() {
                 ) : (
                   <span style={{ fontSize: 12, color: c.sub }}>Autosave on</span>
                 )}
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <CEProgress eventId={eventId} currentStep="resources" />
               </div>
             </div>
 
@@ -2048,9 +2063,9 @@ export default function ResourcesPage() {
                                   display: "flex",
                                   alignItems: "center",
                                   justifyContent: "center",
-                                  border: `1px solid ${c.border}`,
-                                  background: isDetailsOpen ? c.black : c.input,
-                                  color: isDetailsOpen ? c.blackContrast : c.black,
+                                  border: `1px solid ${isDetailsOpen ? c.purpleBorder : c.border}`,
+                                  background: isDetailsOpen ? c.purpleSoft : c.input,
+                                  color: isDetailsOpen ? c.purple : c.black,
                                   borderRadius: 10,
                                   fontWeight: 700,
                                   fontSize: 16,
@@ -2371,109 +2386,25 @@ export default function ResourcesPage() {
                   gap: 14,
                 }}
               >
-                <div
-                  style={{
-                    background: c.card,
-                    border: `1px solid ${c.border}`,
-                    borderRadius: 18,
-                    padding: 12,
-                  }}
-                >
-                  <CEProgress eventId={eventId} currentStep="resources" />
-                </div>
+                <CEReadinessRail
+                  readiness={resourceReadiness}
+                  readinessLabel={resourceReadiness >= 85 ? "Costs supported" : resourceReadiness >= 50 ? "Costs building" : "Needs costs"}
+                  rows={[
+                    { label: "Labour", value: money(totals.labour) },
+                    { label: "Plant", value: money(totals.plant) },
+                    { label: "Material", value: money(totals.material) },
+                    { label: "Lines", value: String(lines.length) },
+                    { label: costLabel, value: money(totals.definedCost) },
+                  ]}
+                  coach="Build costs against activities so the submission can show what changed, what resource was used and why the valuation follows."
+                  nextCopy="Once resources are in, move on to prelims and fee so the full cost build-up can be reviewed together."
+                  primaryHref={buildEventStepPath(eventId, "prelims")}
+                  primaryLabel="Continue to Prelims + Fee"
+                  secondaryHref={buildEventStepPath(eventId, "evidence")}
+                  secondaryLabel="Back to Evidence"
+                  backHref="/app"
+                />
 
-                <SidebarCard title="Summary">
-                  <div
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span>Labour</span>
-                      <span style={{ color: c.black, fontWeight: 600 }}>{money(totals.labour)}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span>Plant</span>
-                      <span style={{ color: c.black, fontWeight: 600 }}>{money(totals.plant)}</span>
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span>Material</span>
-                      <span style={{ color: c.black, fontWeight: 600 }}>{money(totals.material)}</span>
-                    </div>
-
-                    <div style={{ height: 1, background: c.border, margin: "8px 0" }} />
-
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: c.black, fontWeight: 600 }}>{costLabel}</span>
-                      <span style={{ color: c.black, fontWeight: 650 }}>
-                        {money(totals.definedCost)}
-                      </span>
-                    </div>
-                  </div>
-                </SidebarCard>
-
-                <SidebarCard title="Guidance">
-                  Tip: pick from the rate card for speed, then amend the rate only where the event
-                  genuinely requires it.
-                </SidebarCard>
-
-                <SidebarCard title="Next step">
-                  <div style={{ marginBottom: 14 }}>
-                    Once resources are in, move on to prelims and fee so the full cost build-up can be
-                    reviewed together.
-                  </div>
-
-                  <button
-                    onClick={() => router.push(buildEventStepPath(eventId, "evidence"))}
-                    style={{
-                      width: "100%",
-                      border: `1px solid ${c.border}`,
-                      background: c.input,
-                      color: c.black,
-                      padding: "12px",
-                      borderRadius: 12,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      marginBottom: 10,
-                    }}
-                  >
-                    Back to evidence
-                  </button>
-
-                  <button
-                    onClick={() => router.push(buildEventStepPath(eventId, "prelims"))}
-                    style={{
-                      width: "100%",
-                      background: c.black,
-                      color: c.blackContrast,
-                      padding: "12px",
-                      borderRadius: 12,
-                      fontWeight: 600,
-                      border: "none",
-                      cursor: "pointer",
-                      marginBottom: 10,
-                    }}
-                  >
-                    Continue to prelims
-                  </button>
-
-                  <button
-                    onClick={() => router.push(`/app`)}
-                    style={{
-                      width: "100%",
-                      border: `1px solid ${c.border}`,
-                      background: c.lightGrey,
-                      padding: "12px",
-                      borderRadius: 12,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Back to dashboard
-                  </button>
-                </SidebarCard>
               </div>
         </div>
       </div>

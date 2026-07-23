@@ -6,7 +6,8 @@ import { buildEventStepPath, normalizeRouteParam } from "@/lib/routeParams";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getOwnedEventOrThrow, getRequiredUser, isAuthErrorMessage, isOwnershipErrorMessage } from "@/lib/security";
 import CEProgress from "@/components/CEProgress";
-import { getCostLabel, getFeeBasisLabel } from "@/lib/contracts";
+import CEReadinessRail from "@/components/CEReadinessRail";
+import { getCostLabel } from "@/lib/contracts";
 import { recalculateEventFinancialSummary } from "@/lib/financialSummary";
 
 type Unit = "day" | "week";
@@ -434,8 +435,13 @@ export default function PrelimsPage() {
     [definedCost, prelimsTotal, feeAmount]
   );
 
+  const prelimReadiness = useMemo(() => {
+    if (ceTotal > 0 && (settings.fee_percent || 0) >= 0) return 100;
+    if (definedCost > 0) return 70;
+    return 25;
+  }, [ceTotal, definedCost, settings.fee_percent]);
+
   const costLabel = useMemo(() => getCostLabel(contractType), [contractType]);
-  const feeBasisLabel = useMemo(() => getFeeBasisLabel(contractType, settings.fee_basis), [contractType, settings.fee_basis]);
 
   const isDirty = useMemo(() => {
     if (!loaded) return false;
@@ -936,7 +942,7 @@ export default function PrelimsPage() {
   if (!loaded) {
     return (
       <div style={{ background: c.bg, minHeight: "100vh" }}>
-        <div style={{ padding: "22px 18px", maxWidth: 1280, margin: "0 auto" }}>
+        <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
           <div
             style={{
               background: c.card,
@@ -955,8 +961,8 @@ export default function PrelimsPage() {
 
   return (
     <div style={{ background: c.bg, minHeight: "100vh" }}>
-      <div style={{ padding: "22px 18px", maxWidth: 1280, margin: "0 auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20, alignItems: "start" }}>
+      <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 24, alignItems: "start" }}>
           <div style={{ display: "grid", gap: 18, minWidth: 0 }}>
             <div
               style={{
@@ -1027,6 +1033,10 @@ export default function PrelimsPage() {
                 >
                   CE Total: {money(ceTotal)}
                 </span>
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <CEProgress eventId={eventId} currentStep="prelims" />
               </div>
             </div>
 
@@ -1178,118 +1188,25 @@ export default function PrelimsPage() {
               gap: 14,
             }}
           >
-            <div
-              style={{
-                background: c.card,
-                border: `1px solid ${c.border}`,
-                borderRadius: 18,
-                padding: 12,
-              }}
-            >
-              <CEProgress eventId={eventId} currentStep="prelims" />
-            </div>
+            <CEReadinessRail
+              readiness={prelimReadiness}
+              readinessLabel={prelimReadiness >= 85 ? "Valuation ready" : prelimReadiness >= 50 ? "Valuation building" : "Needs valuation"}
+              rows={[
+                { label: costLabel, value: money(definedCost) },
+                { label: "Prelims daily", value: money(prelimsDaily) },
+                { label: `Prelims x ${delayDays || 0} day(s)`, value: money(prelimsTotal) },
+                { label: `Fee (${settings.fee_percent || 0}%)`, value: money(feeAmount) },
+                { label: "CE total", value: money(ceTotal) },
+              ]}
+              coach="Prelims and fee should support the time impact without padding the valuation. Keep rates and delay days transparent."
+              nextCopy="Review the complete commercial position, check likely challenge points and produce the recovery pack when ready."
+              primaryHref={buildEventStepPath(eventId, "review")}
+              primaryLabel="Continue to Review"
+              secondaryHref={buildEventStepPath(eventId, "resources")}
+              secondaryLabel="Back to Resources"
+              backHref="/app"
+            />
 
-            <SidebarCard title="Guidance">
-              <div style={{ display: "grid", gap: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <span>{costLabel}</span>
-                  <strong style={{ color: c.black }}>{money(definedCost)}</strong>
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <span>Prelims (daily)</span>
-                  <strong style={{ color: c.black }}>{money(prelimsDaily)}</strong>
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <span>Prelims × {delayDays || 0} day(s)</span>
-                  <strong style={{ color: c.black }}>{money(prelimsTotal)}</strong>
-                </div>
-
-                <div style={{ display: "grid", gap: 4 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                    <span>Fee ({settings.fee_percent || 0}%)</span>
-                    <strong style={{ color: c.black }}>{money(feeAmount)}</strong>
-                  </div>
-                  <div style={{ fontSize: 11, color: c.sub }}>{feeBasisLabel}</div>
-                </div>
-
-                <div style={{ height: 1, background: c.border, margin: "2px 0" }} />
-
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  <span style={{ color: c.black, fontWeight: 600 }}>CE Total</span>
-                  <strong style={{ color: c.black }}>{money(ceTotal)}</strong>
-                </div>
-
-                <div style={{ height: 1, background: c.border, margin: "2px 0" }} />
-
-                <div>Use day or week rates only for time-related prelims.</div>
-                <div>Delay days multiply the daily equivalent of each prelim line.</div>
-                <div>Fee is calculated deterministically from the selected basis.</div>
-
-                {lastSavedAt ? (
-                  <div>Last saved at {new Date(lastSavedAt).toLocaleTimeString()}</div>
-                ) : (
-                  <div>Changes save automatically shortly after you stop typing.</div>
-                )}
-              </div>
-            </SidebarCard>
-
-            <SidebarCard title="Next step">
-              <div style={{ marginBottom: 14 }}>
-                Once prelims and fee are set, move to review to check the full CE build-up and final
-                output structure.
-              </div>
-
-              <button
-                onClick={() => router.push(buildEventStepPath(eventId, "resources"))}
-                style={{
-                  width: "100%",
-                  border: `1px solid ${c.border}`,
-                  background: c.input,
-                  color: c.black,
-                  padding: "12px",
-                  borderRadius: 12,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  marginBottom: 10,
-                }}
-              >
-                Back to resources
-              </button>
-
-              <button
-                onClick={() => router.push(buildEventStepPath(eventId, "review"))}
-                style={{
-                  width: "100%",
-                  background: c.black,
-                  color: c.blackContrast,
-                  padding: "12px",
-                  borderRadius: 12,
-                  fontWeight: 600,
-                  border: "none",
-                  cursor: "pointer",
-                  marginBottom: 10,
-                }}
-              >
-                Continue to review
-              </button>
-
-              <button
-                onClick={() => router.push(`/app`)}
-                style={{
-                  width: "100%",
-                  border: `1px solid ${c.border}`,
-                  background: c.lightGrey,
-                  padding: "12px",
-                  borderRadius: 12,
-                  fontWeight: 500,
-                  cursor: "pointer",
-                }}
-              >
-                Back to dashboard
-              </button>
-            </SidebarCard>
           </div>
         </div>
       </div>

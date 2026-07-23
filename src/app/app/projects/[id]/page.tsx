@@ -7,6 +7,8 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { getContractLabel } from "@/lib/contracts";
 import { displayEventReference, displayEventTitle } from "@/lib/eventReference";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
+import { applyDerivedPaymentTracking } from "@/lib/paymentTracking";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
 import {
   PAYMENT_STATUS_OPTIONS,
   formatDateShort,
@@ -17,6 +19,7 @@ import {
   normalisePaymentStatus,
   toDateInputValue,
 } from "@/lib/commercialControl";
+import { AppPageHeader, MetricCard, PrimaryButton, QuietButton, toneColours } from "@/components/appUi";
 
 type ProjectRow = {
   id: string;
@@ -88,6 +91,16 @@ type EwnRow = {
   converted_event_id?: string | null;
 };
 
+const PROJECT_STATUS_OPTIONS = [
+  { value: "live", label: "Live", tone: "green" },
+  { value: "dormant", label: "Dormant", tone: "orange" },
+  { value: "defects", label: "Defects", tone: "purple" },
+  { value: "closed", label: "Closed", tone: "neutral" },
+] as const;
+
+type ProjectStatusValue = (typeof PROJECT_STATUS_OPTIONS)[number]["value"];
+type AppTone = "neutral" | "purple" | "blue" | "green" | "orange" | "red" | "pink";
+
 const c = {
   card: "var(--surface)",
   input: "var(--surface-input)",
@@ -103,9 +116,6 @@ const c = {
   greenBg: "var(--green-bg)",
   greenBd: "var(--green-border)",
   greenTx: "var(--green-text)",
-  amberBg: "var(--amber-bg)",
-  amberBd: "var(--amber-border)",
-  amberTx: "var(--amber-text)",
   blueBg: "var(--blue-bg)",
   blueBd: "var(--blue-border)",
   blueTx: "var(--blue-text)",
@@ -237,10 +247,22 @@ function nextAction(events: EventRow[], ewns: EwnRow[]) {
   const overdue = activeEvents.filter(isOverdue).sort((a, b) => outstandingValue(b) - outstandingValue(a))[0];
   if (overdue) return { label: "Chase payment", detail: `${displayEventReference(overdue)} is overdue. Outstanding ${money(outstandingValue(overdue))}.`, href: `/app?trackPayment=${overdue.id}`, tone: "red" as const };
   const openEwn = ewns.find((ewn) => ewn.status !== "converted" && ewn.status !== "closed");
-  if (openEwn) return { label: "Review EWN", detail: openEwn.title || "Open EWN needs review.", href: `/app/ewns?ewn=${openEwn.id}`, tone: "amber" as const };
+  if (openEwn) return { label: "Review EWN", detail: openEwn.title || "Open EWN needs review.", href: `/app/ewns?ewn=${openEwn.id}`, tone: "orange" as const };
   const draft = activeEvents.find((event) => ["draft", "review", "ready"].includes(normaliseCommercialStatus(event.status)));
   if (draft) return { label: "Continue CE", detail: displayEventTitle(draft), href: `/app/event/${draft.id}`, tone: "blue" as const };
-  return { label: "No urgent action", detail: "Project is commercially quiet at the moment.", href: "/app/new", tone: "neutral" as const };
+  return { label: "No urgent action", detail: "Project is commercially quiet at the moment.", href: "/app/new", tone: "green" as const };
+}
+
+function projectActionColours(tone: AppTone) {
+  const colors = toneColours(tone);
+  return { bg: colors.bg, bd: colors.border, tx: colors.text };
+}
+
+function projectStatusTone(status?: string | null) {
+  const option = PROJECT_STATUS_OPTIONS.find((item) => item.value === status);
+  const tone = (option?.tone ?? "green") as AppTone;
+  const colors = toneColours(tone);
+  return { bg: colors.bg, bd: colors.border, tx: colors.text, tone };
 }
 
 export default function ProjectDetailPage() {
@@ -251,6 +273,7 @@ export default function ProjectDetailPage() {
   const [ewns, setEwns] = useState<EwnRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [statusSaving, setStatusSaving] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -380,8 +403,7 @@ export default function ProjectDetailPage() {
       Object.prototype.hasOwnProperty.call(next, "paid_amount") ||
       Object.prototype.hasOwnProperty.call(next, "disallowed_amount")
     ) {
-      const merged = { ...previous, ...patch };
-      patch.balance_outstanding = Math.max(0, assessedTrackingValue(merged, currentValue) - paidTrackingValue(merged, currentValue));
+      Object.assign(patch, applyDerivedPaymentTracking(previous, patch, currentValue));
       patch.last_action_type = "value_updated";
       patch.last_action_date = actionToday;
     }
@@ -435,7 +457,7 @@ export default function ProjectDetailPage() {
         }
       }
 
-      await (supabase as any).from("event_actions").insert({
+      const actionInsert = await (supabase as any).from("event_actions").insert({
         event_id: eventId,
         user_id: user.id,
         action_type: patch.last_action_type || "tracking_updated",
@@ -443,9 +465,52 @@ export default function ProjectDetailPage() {
         notes: recoveryActionSummary(patch),
         metadata: patch,
       });
+      if (actionInsert.error) {
+        console.warn("Project CE tracking saved without action history", actionInsert.error);
+      }
+
+      void trackAnalyticsWithUser(supabase, "payment_status_updated", {
+        event_id: eventId,
+        project_id: project?.id || previous.project_id || null,
+        action_type: patch.last_action_type || "tracking_updated",
+        ce_status: patch.status || previous.status || null,
+        payment_status: patch.payment_status || previous.payment_status || null,
+        paid_amount: patch.paid_amount ?? null,
+        assessed_amount: patch.assessed_amount ?? null,
+        disallowed_amount: patch.disallowed_amount ?? null,
+        balance_outstanding: patch.balance_outstanding ?? null,
+      });
     } catch (err) {
       console.error("Failed to update project CE tracking", err);
       setEvents((prev) => prev.map((event) => (event.id === eventId ? previous : event)));
+    }
+  }
+
+  async function updateProjectStatus(nextStatus: ProjectStatusValue) {
+    if (!project || project.status === nextStatus) return;
+    const previous = project;
+
+    setErr(null);
+    setStatusSaving(true);
+    setProject({ ...project, status: nextStatus });
+
+    try {
+      const supabase = supabaseBrowser();
+      const user = await getRequiredUser(supabase);
+      const update = await (supabase as any)
+        .from("projects")
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq("id", project.id)
+        .eq("user_id", user.id);
+      if (update.error) throw update.error;
+    } catch (error) {
+      setProject(previous);
+      const message = error instanceof Error ? error.message : "Project status could not be saved.";
+      setErr(/status|schema cache|column/i.test(message)
+        ? "Project status could not be saved. Run the projects status SQL patch, then try again."
+        : message);
+    } finally {
+      setStatusSaving(false);
     }
   }
 
@@ -453,35 +518,41 @@ export default function ProjectDetailPage() {
   if (err) return <div style={{ border: `1px solid ${c.redBd}`, background: c.redBg, color: c.redTx, borderRadius: 16, padding: 16, fontWeight: 800 }}>{err}</div>;
   if (!project) return <div style={{ color: c.sub, fontWeight: 800 }}>Project not found.</div>;
 
-  const actionTone = summary.action.tone === "red" ? { bg: c.redBg, bd: c.redBd, tx: c.redTx } : summary.action.tone === "amber" ? { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx } : summary.action.tone === "blue" ? { bg: c.blueBg, bd: c.blueBd, tx: c.blueTx } : { bg: c.soft, bd: c.border, tx: c.sub };
+  const actionTone = projectActionColours(summary.action.tone);
+  const projectTone = projectStatusTone(project.status);
   const encodedProject = encodeURIComponent(project.project_name);
   const encodedContractor = encodeURIComponent(project.main_contractor || "");
   const encodedContract = project.contract_type ? encodeURIComponent(project.contract_type) : "";
 
   return (
-    <div style={{ display: "grid", gap: 18, maxWidth: 1240 }}>
-      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 22, boxShadow: "var(--shadow-soft)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div style={{ minWidth: 0, display: "grid", gap: 7 }}>
-            <Link href="/app/projects" style={{ color: c.sub, fontSize: 12, fontWeight: 800, textDecoration: "none", lineHeight: 1.2 }}>← Projects</Link>
-            <h1 style={{ margin: 0, color: c.text, fontSize: "var(--fs-page-title)", fontWeight: 700, letterSpacing: 0, lineHeight: "var(--lh-tight)" }}>{project.project_name}</h1>
-            <p style={{ margin: 0, color: c.sub, fontSize: 13, lineHeight: 1.5, fontWeight: 650 }}>{project.main_contractor || "Contractor not set"} • {getContractLabel(project.contract_type)}</p>
-          </div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-            <Link href={`/app/new?project=${encodedProject}&main_contractor=${encodedContractor}&contract_type=${encodedContract}&project_id=${project.id}`} style={buttonStyle("primary")}>+ New CE</Link>
-            <Link href={`/app/ewns/new?project=${encodedProject}&main_contractor=${encodedContractor}&contract_type=${encodedContract}&project_id=${project.id}`} style={buttonStyle("quiet")}>+ New EWN</Link>
-            <Link href="/app/rates" style={buttonStyle("quiet")}>Rate cards</Link>
-          </div>
-        </div>
-      </section>
+    <div style={{ display: "grid", gap: 16 }}>
+      <Link href="/app/projects" style={{ color: c.sub, fontSize: 12, fontWeight: 750, textDecoration: "none" }}>← Projects</Link>
+      <AppPageHeader
+        title={project.project_name}
+        description={`${project.main_contractor || "Contractor not set"} • ${getContractLabel(project.contract_type)}`}
+        actions={<>
+          <select
+            className="app-control"
+            value={(project.status || "live") as ProjectStatusValue}
+            disabled={statusSaving}
+            onChange={(e) => void updateProjectStatus(e.target.value as ProjectStatusValue)}
+            style={{ height: 44, padding: "0 13px", borderColor: projectTone.bd, background: projectTone.bg, color: projectTone.tx, fontWeight: 800 }}
+          >
+            {PROJECT_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <PrimaryButton href={`/app/new?project=${encodedProject}&main_contractor=${encodedContractor}&contract_type=${encodedContract}&project_id=${project.id}`}>+ New CE</PrimaryButton>
+          <QuietButton href={`/app/ewns/new?project=${encodedProject}&main_contractor=${encodedContractor}&contract_type=${encodedContract}&project_id=${project.id}`}>+ New EWN</QuietButton>
+          <QuietButton href="/app/rates">Rate cards</QuietButton>
+        </>}
+      />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 }}>
-        <Metric label="Recoverable" value={money(summary.recoverable)} />
-        <Metric label="Submitted" value={money(summary.submitted)} />
-        <Metric label="Paid" value={money(summary.paid)} />
-        <Metric label="Outstanding" value={money(summary.outstanding)} />
-        <Metric label="Overdue" value={summary.overdue.length} />
-        <Metric label="Open EWNs" value={summary.openEwns.length} />
+      <div className="app-project-detail-metrics" style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 }}>
+        <MetricCard label="Recoverable" value={money(summary.recoverable)} hint={`${events.length} CEs`} tone="green" />
+        <MetricCard label="Submitted" value={money(summary.submitted)} hint="Issued value" tone="blue" />
+        <MetricCard label="Paid" value={money(summary.paid)} hint="Recovered" tone="purple" />
+        <MetricCard label="Outstanding" value={money(summary.outstanding)} hint="Unpaid" tone="orange" />
+        <MetricCard label="Overdue" value={summary.overdue.length} hint="Payment risk" tone="red" />
+        <MetricCard label="Open EWNs" value={summary.openEwns.length} hint="Awaiting action" tone="purple" />
       </div>
 
       <section style={{ border: `1px solid ${actionTone.bd}`, background: actionTone.bg, color: actionTone.tx, borderRadius: 20, padding: 18, display: "flex", justifyContent: "space-between", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -500,7 +571,7 @@ export default function ProjectDetailPage() {
             const editable = paymentEditable(event);
             const balance = outstandingValue(event);
             const voided = isVoided(event);
-            const balanceTone = isOverdue(event) ? { bg: c.redBg, bd: c.redBd, tx: c.redTx } : balance > 0 ? { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx } : { bg: c.greenBg, bd: c.greenBd, tx: c.greenTx };
+            const balanceTone = isOverdue(event) ? projectActionColours("red") : balance > 0 ? projectActionColours("orange") : projectActionColours("green");
             return (
             <div key={event.id} style={{ border: `1px solid ${c.border}`, background: c.soft, borderRadius: 16, padding: 14, display: "grid", gap: 12, opacity: voided ? 0.68 : 1 }}>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) 130px 150px 140px", gap: 12, alignItems: "center" }}>
@@ -509,7 +580,7 @@ export default function ProjectDetailPage() {
                   <div style={{ marginTop: 4, color: c.sub, fontSize: 12, fontWeight: 700 }}>Created {formatDateShort(event.created_at)}</div>
                 </div>
                 <Badge label={getCommercialStatusLabel(event.status)} tone={voided ? "neutral" : "blue"} />
-                {voided ? <Badge label="Excluded" tone="neutral" /> : <Badge label={getPaymentStatusLabel(event.payment_status)} tone={normalisePaymentStatus(event.payment_status) === "paid" ? "green" : isOverdue(event) ? "red" : "amber"} />}
+                {voided ? <Badge label="Excluded" tone="neutral" /> : <Badge label={getPaymentStatusLabel(event.payment_status)} tone={normalisePaymentStatus(event.payment_status) === "paid" ? "green" : isOverdue(event) ? "red" : "orange"} />}
                 <div style={{ color: c.black, fontWeight: 800, textAlign: "right" }}>{money(outstandingValue(event))}</div>
               </div>
               <details style={{ borderTop: `1px solid ${c.border}`, paddingTop: 10 }}>
@@ -564,7 +635,7 @@ export default function ProjectDetailPage() {
                   <div style={{ marginTop: 4, color: c.sub, fontSize: 12, fontWeight: 700 }}>{ewn.impact || "Impact not recorded"}</div>
                 </div>
                 <div style={{ color: c.sub, fontSize: 12, fontWeight: 800 }}>{formatDateShort(ewn.event_date)}</div>
-                <Badge label={ewn.status === "converted" ? "Converted" : ewn.status || "Open"} tone={ewn.status === "converted" ? "green" : "amber"} />
+                <Badge label={ewn.status === "converted" ? "Converted" : ewn.status || "Open"} tone={ewn.status === "converted" ? "green" : "orange"} />
               </div>
             </Link>
           ))}
@@ -574,17 +645,9 @@ export default function ProjectDetailPage() {
   );
 }
 
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 18, padding: 16, minHeight: 98 }}>
-      <div style={{ color: c.sub, fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: "var(--tracking-label)", lineHeight: 1.25 }}>{label}</div>
-      <div style={{ marginTop: 14, color: c.text, fontSize: 22, fontWeight: 800, letterSpacing: 0, lineHeight: 1.08 }}>{value}</div>
-    </div>
-  );
-}
-
-function Badge({ label, tone }: { label: string; tone: "green" | "blue" | "amber" | "red" | "neutral" }) {
-  const colors = tone === "green" ? { bg: c.greenBg, bd: c.greenBd, tx: c.greenTx } : tone === "blue" ? { bg: c.blueBg, bd: c.blueBd, tx: c.blueTx } : tone === "red" ? { bg: c.redBg, bd: c.redBd, tx: c.redTx } : tone === "neutral" ? { bg: c.soft, bd: c.border, tx: c.sub } : { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx };
+function Badge({ label, tone }: { label: string; tone: "green" | "blue" | "orange" | "red" | "purple" | "neutral" }) {
+  const tc = toneColours(tone);
+  const colors = { bg: tc.bg, bd: tc.border, tx: tc.text };
   return <span style={{ justifySelf: "start", border: `1px solid ${colors.bd}`, background: colors.bg, color: colors.tx, borderRadius: 999, padding: "7px 10px", fontSize: 12, fontWeight: 800, textTransform: "capitalize" }}>{label}</span>;
 }
 

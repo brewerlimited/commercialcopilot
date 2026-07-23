@@ -6,6 +6,8 @@ import { buildEventStepPath, normalizeRouteParam } from "@/lib/routeParams";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getOwnedEventOrThrow, getRequiredUser, isAuthErrorMessage, isOwnershipErrorMessage } from "@/lib/security";
 import CEProgress from "@/components/CEProgress";
+import CEReadinessRail from "@/components/CEReadinessRail";
+import { AppSideCard } from "@/components/appUi";
 import { downloadCeWorkbook } from "@/lib/exportWorkbook";
 import { COMPANY_PROFILE_SELECT, cleanCompanyProfile, type CompanyProfile } from "@/lib/companyProfile";
 import { getContractFamily, getContractLabel, getCostLabel, getFeeBasisLabel } from "@/lib/contracts";
@@ -13,7 +15,7 @@ import { displayEventReference } from "@/lib/eventReference";
 import { getDraftTemplateForContractType } from "@/lib/draftTemplates";
 import { recalculateEventFinancialSummary } from "@/lib/financialSummary";
 import { getCommercialStatusLabel, normaliseCommercialStatus } from "@/lib/commercialControl";
-import { isSubscriptionActive, type BillingStatus } from "@/lib/billing";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
 
 type Unit = "day" | "week";
 
@@ -116,6 +118,15 @@ const defaultReviewSettings: ReviewSettings = {
   qualifications_notes: "",
 };
 
+const PACK_GENERATION_STAGES = [
+  "Reviewing event records",
+  "Establishing the change",
+  "Assessing Defined Cost",
+  "Analysing programme impact",
+  "Preparing contractual position",
+  "Testing likely pushback",
+  "Completing the submission",
+];
 
 function splitSentencesForPushback(value: unknown) {
   return String(value || "")
@@ -502,6 +513,7 @@ function ReviewPageContent() {
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationStage, setGenerationStage] = useState("Preparing generation…");
   const [generationEta, setGenerationEta] = useState("Estimating time…");
+  const [generationDownloadReady, setGenerationDownloadReady] = useState(false);
   const progressTimerRef = useRef<number | null>(null);
   const [hasGeneratedPack, setHasGeneratedPack] = useState(false);
   const [forceGenerateMode, setForceGenerateMode] = useState(false);
@@ -509,7 +521,8 @@ function ReviewPageContent() {
   const [billingGateLoaded, setBillingGateLoaded] = useState(false);
   const [creditsRemaining, setCreditsRemaining] = useState(0);
   const [isAdminUnlimited, setIsAdminUnlimited] = useState(false);
-  const [subscriptionStatus, setSubscriptionStatus] = useState<BillingStatus>("inactive");
+  const [generationAllowed, setGenerationAllowed] = useState(false);
+  const [generationGateMessage, setGenerationGateMessage] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [showReadinessDetails, setShowReadinessDetails] = useState(false);
   const [generatedCommercialPushback, setGeneratedCommercialPushback] = useState<Array<{ heading: string; note: string }>>([]);
@@ -553,24 +566,19 @@ function ReviewPageContent() {
     const targetMs = 120000;
 
     setGenerationProgress(3);
-    setGenerationStage("Step 1 of 5: Extracting commercial context…");
+    setGenerationDownloadReady(false);
+    setGenerationStage(PACK_GENERATION_STAGES[0]);
     setGenerationEta(formatGenerationEta(targetMs / 1000));
 
     progressTimerRef.current = window.setInterval(() => {
       const elapsedMs = Date.now() - startedAt;
-      const rawProgress = Math.min(91, 3 + (elapsedMs / targetMs) * 88);
+      const rawProgress = Math.min(94, 3 + (elapsedMs / targetMs) * 91);
+      const stageIndex = Math.min(
+        PACK_GENERATION_STAGES.length - 1,
+        Math.floor((elapsedMs / targetMs) * PACK_GENERATION_STAGES.length)
+      );
 
-      if (elapsedMs < 20000) {
-        setGenerationStage("Step 1 of 5: Extracting commercial context…");
-      } else if (elapsedMs < 45000) {
-        setGenerationStage("Step 2 of 5: Running Standard-for-Multi baseline for Excel tabs…");
-      } else if (elapsedMs < 95000) {
-        setGenerationStage("Step 3 of 5: Generating all enhanced commercial sections together…");
-      } else if (elapsedMs < 112000) {
-        setGenerationStage("Step 4 of 5: Running commercial director QA review…");
-      } else {
-        setGenerationStage("Step 5 of 5: Finalising workbook download…");
-      }
+      setGenerationStage(PACK_GENERATION_STAGES[stageIndex]);
 
       setGenerationEta(formatGenerationEta((targetMs - elapsedMs) / 1000));
       setGenerationProgress(rawProgress);
@@ -579,9 +587,10 @@ function ReviewPageContent() {
 
   async function finishGenerationProgress() {
     clearGenerationProgressTimer();
-    setGenerationStage("Finalising download…");
-    setGenerationEta("Almost done…");
+    setGenerationStage("Submission completed");
+    setGenerationEta("Ready to download");
     setGenerationProgress(100);
+    setGenerationDownloadReady(true);
     await new Promise((resolve) => window.setTimeout(resolve, 450));
   }
 
@@ -805,15 +814,15 @@ function ReviewPageContent() {
   const effectiveForceGenerateMode = isAdminUnlimited && forceGenerateMode;
   const packReady = hasGeneratedPack && !effectiveForceGenerateMode;
   const billingGatePending = !billingGateLoaded && !packReady;
-  const subscriptionLocked = billingGateLoaded && !isAdminUnlimited && !isSubscriptionActive(subscriptionStatus) && !packReady;
-  const generationCreditLocked = billingGateLoaded && !isAdminUnlimited && creditsRemaining <= 0 && !packReady;
-  const generateDisabled = !packReady && (blockers > 0 || isGenerating || billingGatePending || subscriptionLocked || generationCreditLocked);
+  const generationCreditLocked = billingGateLoaded && !isAdminUnlimited && generationAllowed && creditsRemaining <= 0 && !packReady;
+  const activationLocked = billingGateLoaded && !isAdminUnlimited && !generationAllowed && !packReady;
+  const generateDisabled = !packReady && (blockers > 0 || isGenerating || billingGatePending || activationLocked || generationCreditLocked);
   const generateButtonLabel = effectiveForceGenerateMode ? "Produce recovery pack" : isGenerating
     ? "Generating…"
     : billingGatePending
     ? "Checking billing…"
-    : subscriptionLocked
-    ? "Subscription required"
+    : activationLocked
+    ? "Trial activation required"
     : generationCreditLocked
     ? "No credits remaining"
     : packReady
@@ -1111,7 +1120,8 @@ function ReviewPageContent() {
         const loadedIsAdminUnlimited = Boolean(creditGateData?.isAdminUnlimited);
         setIsAdminUnlimited(loadedIsAdminUnlimited);
         setCreditsRemaining(clampNum(creditGateData?.creditsRemaining, 0));
-        setSubscriptionStatus((creditGateData?.subscriptionStatus as BillingStatus) || "inactive");
+        setGenerationAllowed(Boolean(creditGateData?.generationAllowed));
+        setGenerationGateMessage(creditGateData?.generationGateMessage || null);
 
         const existingPackId = await getExistingPackId(supabase, user.id);
         const existingPackAvailable = Boolean(existingPackId) && !(loadedIsAdminUnlimited && getForceGenerateMode());
@@ -1285,11 +1295,11 @@ function ReviewPageContent() {
   async function buildWorkbookPayload(supabase: ReturnType<typeof supabaseBrowser>, userId: string) {
     let eventData: any;
     try {
-      eventData = await getOwnedEventOrThrow(
+        eventData = await getOwnedEventOrThrow(
         supabase,
         eventId,
         userId,
-        "id,title,status,payment_status,delay_days,contract_type,contract_source,event_number,event_reference,user_id"
+        "id,title,status,payment_status,delay_days,contract_type,contract_source,project_name,main_contractor,event_number,event_reference,user_id"
       );
     } catch (eventLoadError: any) {
       const message = String(eventLoadError?.message || "");
@@ -1299,7 +1309,7 @@ function ReviewPageContent() {
         supabase,
         eventId,
         userId,
-        "id,title,status,delay_days,contract_type,contract_source,event_number,event_reference,user_id"
+        "id,title,status,delay_days,contract_type,contract_source,project_name,main_contractor,event_number,event_reference,user_id"
       );
     }
 
@@ -1414,6 +1424,8 @@ function ReviewPageContent() {
           title: (eventRes.data as any)?.title ?? title,
           contractType: (eventRes.data as any)?.contract_type ?? contractType,
           contractSource: (eventRes.data as any)?.contract_source ?? contractSource,
+          projectName: (eventRes.data as any)?.project_name ?? "",
+          mainContractor: (eventRes.data as any)?.main_contractor ?? "",
           delayDays: clampNum((eventRes.data as any)?.delay_days, delayDays),
           generatedAt: new Date().toISOString(),
           ceRef: displayEventReference(eventRes.data),
@@ -1485,6 +1497,9 @@ function ReviewPageContent() {
 
       setGeneratedRebuttal(data.rebuttal || null);
       setRebuttalTableMissing(false);
+      void trackAnalyticsWithUser(supabase, "rebuttal_generated", {
+        event_id: eventId,
+      });
     } catch (e: any) {
       console.error(e);
       const message = e?.message || "Failed to generate rebuttal";
@@ -1495,7 +1510,7 @@ function ReviewPageContent() {
   }
 
   async function handleDownloadPack() {
-    if (!eventId || !isUuid(eventId)) return;
+    if (!eventId || !isUuid(eventId)) return false;
 
     setSaveErr(null);
 
@@ -1551,10 +1566,23 @@ function ReviewPageContent() {
       const workbookPayload = mergeCompanyProfileForWorkbook(payload, latestDraftPayload);
       console.info("[review] workbook company profile", workbookPayload.companyProfile);
       await downloadCeWorkbook(workbookPayload, latestAiDraft);
+      return true;
 
     } catch (e: any) {
       console.error(e);
       setSaveErr(e?.message ?? "Failed to download pack");
+      return false;
+    }
+  }
+
+  async function handleDownloadGeneratedPack() {
+    if (!generationDownloadReady) return;
+    const downloaded = await handleDownloadPack();
+    if (downloaded) {
+      setGenerationDownloadReady(false);
+      setGenerationProgress(0);
+      setGenerationStage("Preparing generation…");
+      setGenerationEta("Estimating time…");
     }
   }
 
@@ -1577,8 +1605,8 @@ function ReviewPageContent() {
       return;
     }
 
-    if (subscriptionLocked) {
-      setSaveErr("Your subscription is not active. Open Billing to upgrade before generating a recovery pack.");
+    if (activationLocked) {
+      setSaveErr(generationGateMessage || "Generation is not active on this account yet. Contact Commercial Co-Pilot to activate trial or paid access.");
       return;
     }
 
@@ -1590,6 +1618,7 @@ function ReviewPageContent() {
     setIsGenerating(true);
     startGenerationProgress();
     setSaveErr(null);
+    let generationCompleted = false;
 
     try {
       const supabase = supabaseBrowser();
@@ -1602,6 +1631,14 @@ function ReviewPageContent() {
       if (sessionRes.error) throw sessionRes.error;
       const accessToken = (sessionRes.data as any)?.session?.access_token;
       if (!accessToken) throw new Error("AUTH_REQUIRED");
+
+      void trackAnalyticsWithUser(supabase, "pack_generation_started", {
+        event_id: eventId,
+        generation_mode: generationMode,
+        force_generate: liveForceGenerateMode,
+        total_value: ceTotal || 0,
+        readiness,
+      });
 
       const generateRes = await fetch("/api/generate-pack", {
         method: "POST",
@@ -1659,14 +1696,6 @@ function ReviewPageContent() {
       if (generateData?.existing) {
         await finishGenerationProgress();
 
-        // Existing generated packs must still download the exact AI payload and
-        // AI draft returned by the API. Do not re-fetch the workbook without the
-        // returned draft, otherwise old/broken rows with no draft_output can
-        // produce a workbook that falls back to raw form inputs.
-        const workbookPayload = mergeCompanyProfileForWorkbook(payload, generateData?.draftPayload);
-        console.info("[review] workbook company profile", workbookPayload.companyProfile);
-        await downloadCeWorkbook(workbookPayload, generateData?.aiDraft);
-
         const existingPushback = reviewSettings.include_commercial_pushback
           ? extractGeneratedCommercialPushback(generateData?.aiDraft)
           : [];
@@ -1677,14 +1706,20 @@ function ReviewPageContent() {
         if (typeof generateData?.creditsRemaining === "number") {
           setCreditsRemaining(generateData.creditsRemaining);
         }
+        void trackAnalyticsWithUser(supabase, "pack_generation_completed", {
+          event_id: eventId,
+          pack_id: generateData?.packId || null,
+          existing: true,
+          credit_charged: Boolean(generateData?.creditCharged),
+          total_value: ceTotal || 0,
+          readiness,
+        });
+        generationCompleted = true;
+        setIsGenerating(false);
         return;
       }
 
       await finishGenerationProgress();
-
-      const workbookPayload = mergeCompanyProfileForWorkbook(payload, generateData?.draftPayload);
-      console.info("[review] workbook company profile", workbookPayload.companyProfile);
-      await downloadCeWorkbook(workbookPayload, generateData?.aiDraft);
 
       const generatedPushback = reviewSettings.include_commercial_pushback
         ? extractGeneratedCommercialPushback(generateData?.aiDraft)
@@ -1708,14 +1743,32 @@ function ReviewPageContent() {
       // and the browser download calls have completed without throwing.
       setHasGeneratedPack(true);
       if (!isAdminUnlimited) setForceGenerateMode(false);
+      void trackAnalyticsWithUser(supabase, "pack_generation_completed", {
+        event_id: eventId,
+        pack_id: generateData?.packId || null,
+        existing: false,
+        credit_charged: Boolean(generateData?.creditCharged),
+          total_value: ceTotal || 0,
+          readiness,
+      });
+      generationCompleted = true;
+      setIsGenerating(false);
     } catch (e: any) {
       clearGenerationProgressTimer();
       setGenerationProgress(0);
       setGenerationStage("Preparing generation…");
+      setGenerationDownloadReady(false);
       console.error(e);
+      try {
+        const supabase = supabaseBrowser();
+        void trackAnalyticsWithUser(supabase, "pack_generation_failed", {
+          event_id: eventId,
+          message: e?.message || "Failed to generate Excel pack",
+        });
+      } catch {}
       setSaveErr(e?.message ?? "Failed to generate Excel pack");
     } finally {
-      setIsGenerating(false);
+      if (!generationCompleted) setIsGenerating(false);
     }
   }
   if (!eventId || !isUuid(eventId)) {
@@ -1725,7 +1778,7 @@ function ReviewPageContent() {
   if (!loaded) {
     return (
       <div style={{ background: c.bg, minHeight: "100vh" }}>
-        <div style={{ padding: "22px 18px", maxWidth: 1280, margin: "0 auto" }}>
+        <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
           <div
             style={{
               background: c.card,
@@ -1744,7 +1797,7 @@ function ReviewPageContent() {
 
   return (
     <div style={{ background: c.bg, minHeight: "100vh", position: "relative" }}>
-      {isGenerating ? (
+      {isGenerating || generationDownloadReady ? (
         <div
           style={{
             position: "fixed",
@@ -1768,20 +1821,65 @@ function ReviewPageContent() {
             }}
           >
             <div style={{ fontSize: 22, fontWeight: 700, color: c.black }}>
-              Generating enhanced pack
+              {generationDownloadReady ? "Recovery pack ready" : "Generating recovery pack"}
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.6, color: c.sub, marginTop: 8 }}>
-              Extracting commercial context, strengthening causation, and preparing the workbook for download.
+              {generationDownloadReady
+                ? "The submission has been completed and the workbook is ready to download."
+                : "Building the commercial position, valuation support and submission workbook."}
             </div>
             <div style={{ marginTop: 18, height: 10, borderRadius: 999, overflow: "hidden", background: c.lightGrey }}>
               <div
                 style={{
                   width: `${generationProgress}%`,
                   height: "100%",
-                  background: c.black,
+                  background: generationDownloadReady ? c.greenText : c.black,
                   transition: "width 650ms ease",
                 }}
               />
+            </div>
+            <div style={{ display: "grid", gap: 8, marginTop: 18 }}>
+              {PACK_GENERATION_STAGES.map((stage) => {
+                const stageIndex = PACK_GENERATION_STAGES.indexOf(stage);
+                const activeIndex = generationDownloadReady
+                  ? PACK_GENERATION_STAGES.length - 1
+                  : PACK_GENERATION_STAGES.findIndex((item) => item === generationStage);
+                const complete = generationDownloadReady || stageIndex < activeIndex;
+                const active = !generationDownloadReady && stageIndex === activeIndex;
+                return (
+                  <div
+                    key={stage}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      color: complete ? c.greenText : active ? c.black : c.sub,
+                      fontSize: 13,
+                      fontWeight: active || complete ? 750 : 600,
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: 999,
+                        display: "grid",
+                        placeItems: "center",
+                        flex: "0 0 auto",
+                        background: complete ? c.greenBg : active ? "rgba(124, 92, 255, 0.12)" : c.lightGrey,
+                        border: `1px solid ${complete ? c.greenBorder : active ? "rgba(124, 92, 255, 0.24)" : c.border}`,
+                        color: complete ? c.greenText : active ? c.black : c.sub,
+                        fontSize: 12,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {complete ? "✓" : stageIndex + 1}
+                    </span>
+                    <span>{stage}</span>
+                  </div>
+                );
+              })}
             </div>
             <div
               style={{
@@ -1798,12 +1896,53 @@ function ReviewPageContent() {
               <span>{generationStage}</span>
               <span style={{ color: c.black, textAlign: "right" }}>{Math.round(generationProgress)}% complete · {generationEta}</span>
             </div>
+            <button
+              type="button"
+              onClick={handleDownloadGeneratedPack}
+              disabled={!generationDownloadReady}
+              style={{
+                width: "100%",
+                marginTop: 18,
+                height: 46,
+                borderRadius: 14,
+                border: `1px solid ${generationDownloadReady ? c.black : c.border}`,
+                background: generationDownloadReady ? c.black : c.lightGrey,
+                color: generationDownloadReady ? c.blackContrast : c.sub,
+                fontSize: 14,
+                fontWeight: 800,
+                cursor: generationDownloadReady ? "pointer" : "not-allowed",
+                opacity: generationDownloadReady ? 1 : 0.75,
+              }}
+            >
+              {generationDownloadReady ? "Download file" : "Download file"}
+            </button>
           </div>
         </div>
       ) : null}
-      <div style={{ padding: "22px 18px", maxWidth: 1280, margin: "0 auto" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 20, alignItems: "start" }}>
-          <div style={{ display: "grid", gap: 18 }}>
+      <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) 340px",
+            gap: 24,
+            alignItems: "start",
+            height: "calc(100vh - 44px)",
+            minHeight: 0,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            className="cc-hidden-scroll"
+            style={{
+              display: "grid",
+              gap: 18,
+              alignContent: "start",
+              maxHeight: "100%",
+              minHeight: 0,
+              overflowY: "auto",
+              paddingBottom: 24,
+            }}
+          >
             <div
               style={{
                 background: c.card,
@@ -1873,6 +2012,10 @@ function ReviewPageContent() {
                 >
                   Payment readiness: {readiness}%
                 </span>
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <CEProgress eventId={eventId} currentStep="review" />
               </div>
             </div>
 
@@ -2572,42 +2715,36 @@ function ReviewPageContent() {
           </div>
 
           <div
+            className="cc-hidden-scroll"
             style={{
-              position: "sticky",
-              top: 20,
               alignSelf: "start",
               display: "flex",
               flexDirection: "column",
               gap: 14,
+              maxHeight: "100%",
+              minHeight: 0,
+              overflowY: "auto",
+              paddingBottom: 24,
             }}
           >
-            <div
-              style={{
-                background: c.card,
-                border: `1px solid ${c.border}`,
-                borderRadius: 18,
-                padding: 12,
-              }}
-            >
-              <CEProgress eventId={eventId} currentStep="review" />
-            </div>
+            <CEReadinessRail
+              readiness={readiness}
+              readinessLabel={readiness >= 85 ? "Ready to issue" : readiness >= 55 ? "Review advised" : "Needs work"}
+              rows={[
+                { label: "Recovery readiness", value: `${readiness}%` },
+                { label: "Blockers", value: String(blockers) },
+                { label: "Warnings", value: String(warnings) },
+                { label: "Evidence files", value: String(evidenceCount) },
+                { label: "CE total", value: money(ceTotal) },
+              ]}
+              coach="Review is the final recovery check before generation. Missing inputs make the CE easier to discount or reject."
+              nextCopy="Resolve blockers where possible, then produce the recovery pack and Excel cost output from the reviewed totals."
+              secondaryHref={buildEventStepPath(eventId, "prelims")}
+              secondaryLabel="Back to Prelims + Fee"
+              backHref="/app"
+            />
 
-            <SidebarCard title="Recovery guidance">
-              <div style={{ display: "grid", gap: 10 }}>
-                <div>Review is the final recovery check before generation.</div>
-                <div>Missing inputs make the CE easier to discount or reject.</div>
-                <div>Generation uses deterministic totals only.</div>
-                <div>Pushback & Defence surfaces likely challenge points before issue.</div>
-                <div>Contract choice affects entitlement wording and clause references.</div>
-                {lastSavedAt ? (
-                  <div>Last saved at {new Date(lastSavedAt).toLocaleTimeString()}</div>
-                ) : (
-                  <div>Changes save automatically shortly after you stop typing.</div>
-                )}
-              </div>
-            </SidebarCard>
-
-            <SidebarCard title="Produce recovery pack">
+            <AppSideCard title="Produce recovery pack" tone="green" icon="✓">
               <div style={{ display: "grid", gap: 10 }}>
                 <div
                   style={{
@@ -2667,9 +2804,9 @@ function ReviewPageContent() {
                   {generateButtonLabel}
                 </button>
 
-                {subscriptionLocked ? (
+                {activationLocked ? (
                   <div style={{ fontSize: 12, color: c.redText, background: c.redBg, border: `1px solid ${c.redBorder}`, borderRadius: 12, padding: 10 }}>
-                    Your subscription is not active. Open Billing to upgrade before generating a recovery pack.
+                    {generationGateMessage || "Generation is not active on this account yet. Contact Commercial Co-Pilot to activate trial or paid access."}
                   </div>
                 ) : generationCreditLocked ? (
                   <div style={{ fontSize: 12, color: c.redText, background: c.redBg, border: `1px solid ${c.redBorder}`, borderRadius: 12, padding: 10 }}>
@@ -2710,7 +2847,7 @@ function ReviewPageContent() {
                   </div>
                 ) : null}
               </div>
-            </SidebarCard>
+            </AppSideCard>
           </div>
         </div>
       </div>

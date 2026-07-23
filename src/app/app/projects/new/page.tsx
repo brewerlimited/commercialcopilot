@@ -4,8 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { CONTRACT_TYPE_OPTIONS, type KnownContractType } from "@/lib/contracts";
+import { CONTRACT_TYPE_OPTIONS, requiresUploadedContract, type KnownContractType } from "@/lib/contracts";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
 
 const c = {
   card: "var(--surface)",
@@ -58,6 +59,10 @@ export default function NewProjectPage() {
         setErr("Project name is required.");
         return;
       }
+      if (requiresUploadedContract(contractType)) {
+        setErr("Bespoke / unconfirmed projects need a contract upload. Start from New CE, choose this project name, upload the contract and the project will be created safely.");
+        return;
+      }
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
       const payload = {
@@ -65,6 +70,7 @@ export default function NewProjectPage() {
         project_name: cleanProjectName,
         main_contractor: mainContractor.trim(),
         contract_type: contractType,
+        trade_profile: "general",
         status,
         job_number: jobNumber.trim() || null,
         start_date: startDate || null,
@@ -74,12 +80,25 @@ export default function NewProjectPage() {
         notes: notes.trim() || null,
         updated_at: new Date().toISOString(),
       };
-      const res = await (supabase as any).from("projects")
+      let res = await (supabase as any).from("projects")
         .upsert(payload, { onConflict: "user_id,project_name,main_contractor" })
         .select("id")
         .single();
+      if (res.error && /trade_profile|schema cache|column|does not exist/i.test(String(res.error.message || ""))) {
+        const { trade_profile: _tradeProfile, ...fallbackPayload } = payload;
+        res = await (supabase as any).from("projects")
+          .upsert(fallbackPayload, { onConflict: "user_id,project_name,main_contractor" })
+          .select("id")
+          .single();
+      }
       if (res.error) throw res.error;
-      router.push(`/app/projects/${(res.data as any)?.id}`);
+      const createdProjectId = (res.data as any)?.id;
+      void trackAnalyticsWithUser(supabase, "project_created", {
+        project_id: createdProjectId,
+        contract_type: contractType,
+        status,
+      });
+      router.push(`/app/projects/${createdProjectId}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save project";
       if (isAuthErrorMessage(message)) {

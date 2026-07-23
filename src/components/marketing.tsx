@@ -79,14 +79,18 @@ export function TopBar() {
                 height: 38,
                 borderRadius: 12,
                 border: "1px solid rgba(15, 23, 42, 0.10)",
-                background: "#0f172a",
+                background: "#ffffff",
                 display: "grid",
                 placeItems: "center",
-                fontWeight: 800,
-                color: "#ffffff",
+                boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
               }}
             >
-              CC
+              <img
+                src="/brand/ccp-mark-black-transparent.png"
+                alt=""
+                aria-hidden
+                style={{ width: 23, height: 23, objectFit: "contain", display: "block" }}
+              />
             </div>
             <div style={{ lineHeight: 1.1 }}>
               <div style={{ fontWeight: 800, letterSpacing: 0, color: "#0f172a" }}>Commercial Co-Pilot</div>

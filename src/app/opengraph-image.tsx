@@ -54,11 +54,18 @@ export default function OpenGraphImage() {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: 28,
-                  fontWeight: 900,
                 }}
               >
-                CC
+                <div
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 999,
+                    border: "8px solid #ffffff",
+                    borderTopColor: "transparent",
+                    borderBottomColor: "transparent",
+                  }}
+                />
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <div style={{ fontSize: 27, fontWeight: 900 }}>Commercial Co-Pilot</div>

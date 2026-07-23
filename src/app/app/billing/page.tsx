@@ -13,6 +13,7 @@ import {
   humanStatusLabel,
   isSubscriptionActive,
 } from "@/lib/billing";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
 
 const c = {
   bg: "var(--background)",
@@ -62,7 +63,7 @@ function BillingPageContent() {
 
     const [{ data: profile }, { data: creditRow }] = await Promise.all([
       (supabase as any).from("profiles")
-        .select("plan_type, subscription_status, stripe_customer_id, stripe_subscription_id, current_period_end, is_admin_unlimited, credits_remaining")
+        .select("plan_type, subscription_status, account_status, stripe_customer_id, stripe_subscription_id, current_period_end, is_admin_unlimited, credits_remaining")
         .eq("id", user.id)
         .maybeSingle(),
       (supabase as any).from("user_credits").select("credits_remaining").eq("user_id", user.id).maybeSingle(),
@@ -110,6 +111,10 @@ function BillingPageContent() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Request failed");
       if (!json?.url) throw new Error("No redirect URL returned");
+      void trackAnalyticsWithUser(supabase, kind === "checkout" ? "subscription_checkout_started" : kind === "credits" ? "credit_checkout_started" : "billing_portal_opened", {
+        billing_action: kind,
+        credits: body?.quantity || null,
+      });
       window.location.href = json.url;
     } catch (e: any) {
       setError(e?.message || "Billing action failed");

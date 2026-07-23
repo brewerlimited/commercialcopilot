@@ -1,5 +1,7 @@
 import FeedbackWidget from "@/components/FeedbackWidget";
 import { AppearanceProvider } from "@/components/AppearanceProvider";
+import AnalyticsTracker from "@/components/AnalyticsTracker";
+import { Analytics } from "@vercel/analytics/next";
 import type { Metadata } from "next";
 import "./globals.css";
 
@@ -74,6 +76,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <AppearanceProvider>
           {children}
+          <AnalyticsTracker />
+          <Analytics />
           <FeedbackWidget />
         </AppearanceProvider>
       </body>

@@ -40,6 +40,7 @@ type AdminPayload = {
     ceValue: number;
     revenue: number;
   };
+  analytics?: any;
 };
 
 const c = {
@@ -90,6 +91,31 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint?:
   );
 }
 
+function pct(current: number, previous: number) {
+  if (!previous) return "—";
+  return `${Math.round((current / previous) * 100)}%`;
+}
+
+function BarList({ rows }: { rows: Array<{ label: string; value: number }> }) {
+  const max = Math.max(1, ...rows.map((row) => row.value || 0));
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {rows.slice(0, 6).map((row) => (
+        <div key={row.label} style={{ display: "grid", gap: 5 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, fontWeight: 750, color: c.text }}>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+            <span>{row.value}</span>
+          </div>
+          <div style={{ height: 7, borderRadius: 999, background: c.soft, overflow: "hidden" }}>
+            <div style={{ width: `${Math.max(4, (row.value / max) * 100)}%`, height: "100%", borderRadius: 999, background: "var(--active-text)" }} />
+          </div>
+        </div>
+      ))}
+      {rows.length === 0 ? <div style={{ fontSize: 13, color: c.sub }}>No data yet.</div> : null}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
@@ -102,6 +128,7 @@ export default function AdminPage() {
     rows: [],
     feedback: [],
     totals: { users: 0, ceCount: 0, creditsUsed: 0, ceValue: 0, revenue: 0 },
+    analytics: { available: false, reason: "Loading analytics..." },
   });
 
   useEffect(() => {
@@ -218,6 +245,100 @@ export default function AdminPage() {
         <StatCard label="Credits used" value={String(payload.totals.creditsUsed)} hint="Generated pack count" />
         <StatCard label="Total CE value" value={money(payload.totals.ceValue)} hint="Sum of final CE values" />
         <StatCard label="Revenue" value={money(payload.totals.revenue)} hint="Paid subscriptions and credit purchases" />
+      </section>
+
+      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 20, display: "grid", gap: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start", flexWrap: "wrap" }}>
+          <div style={{ display: "grid", gap: 4 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: c.black }}>Acquisition and activation</div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: c.sub }}>First-party analytics for visitors, source, trial intent and real product activation.</div>
+          </div>
+          {!payload.analytics?.available ? (
+            <span style={{ border: `1px solid ${c.border}`, borderRadius: 999, background: c.soft, color: c.sub, padding: "7px 10px", fontSize: 12, fontWeight: 800 }}>
+              {payload.analytics?.reason || "Analytics unavailable"}
+            </span>
+          ) : null}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
+          <StatCard label="Visitors today" value={String(payload.analytics?.headline?.visitorsToday || 0)} hint="Daily rotating visitor hash" />
+          <StatCard label="Visitors 30 days" value={String(payload.analytics?.headline?.visitors30Days || 0)} hint={`${payload.analytics?.headline?.sessions30Days || 0} sessions`} />
+          <StatCard label="Demo clicks" value={String(payload.analytics?.headline?.demoClicks || 0)} hint="Watch demo intent" />
+          <StatCard label="Trial starts" value={String(payload.analytics?.headline?.trialStarts || 0)} hint="Create account clicks" />
+          <StatCard label="Activated trials" value={String(payload.analytics?.headline?.activatedTrials || 0)} hint="At least one pack generated" />
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr repeat(3, minmax(0, .8fr))", gap: 12, alignItems: "stretch" }}>
+          <div style={{ border: `1px solid ${c.border}`, borderRadius: 18, padding: 16, display: "grid", gap: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: c.black }}>Conversion funnel</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {(payload.analytics?.funnel || []).map((step: { label: string; value: number }, index: number, all: Array<{ label: string; value: number }>) => (
+                <div key={step.label} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 12, alignItems: "center", borderBottom: index === all.length - 1 ? "none" : `1px solid ${c.border}`, paddingBottom: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 750, color: c.text }}>{index + 1}. {step.label}</span>
+                  <span style={{ fontSize: 14, fontWeight: 850, color: c.black }}>{step.value}</span>
+                  <span style={{ fontSize: 12, color: c.sub }}>{index === 0 ? "base" : pct(step.value, all[index - 1]?.value || 0)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ border: `1px solid ${c.border}`, borderRadius: 18, padding: 16, display: "grid", gap: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: c.black }}>Traffic sources</div>
+            <BarList rows={payload.analytics?.acquisition?.sources || []} />
+          </div>
+          <div style={{ border: `1px solid ${c.border}`, borderRadius: 18, padding: 16, display: "grid", gap: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: c.black }}>Landing pages</div>
+            <BarList rows={payload.analytics?.pages || []} />
+          </div>
+          <div style={{ border: `1px solid ${c.border}`, borderRadius: 18, padding: 16, display: "grid", gap: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: c.black }}>Feature adoption</div>
+            <BarList
+              rows={[
+                { label: "EWNs created", value: payload.analytics?.featureAdoption?.ewnCreated || 0 },
+                { label: "Evidence uploaded", value: payload.analytics?.featureAdoption?.evidenceUploaded || 0 },
+                { label: "Packs generated", value: payload.analytics?.featureAdoption?.packGenerated || 0 },
+                { label: "Packs downloaded", value: payload.analytics?.featureAdoption?.packDownloaded || 0 },
+                { label: "Rebuttals generated", value: payload.analytics?.featureAdoption?.rebuttalGenerated || 0 },
+                { label: "Payment updates", value: payload.analytics?.featureAdoption?.paymentStatusUpdated || 0 },
+              ]}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+        <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 20, display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: c.black }}>Generation reliability</div>
+            <div style={{ marginTop: 4, fontSize: 13, color: c.sub }}>Pack and rebuttal generation runs without storing generated CE wording.</div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+            <StatCard label="Runs" value={String(payload.analytics?.ai?.totalRuns || 0)} />
+            <StatCard label="Successful" value={String(payload.analytics?.ai?.successfulRuns || 0)} />
+            <StatCard label="Failed" value={String(payload.analytics?.ai?.failedRuns || 0)} />
+            <StatCard label="Avg time" value={`${Math.round((payload.analytics?.ai?.avgDurationMs || 0) / 1000)}s`} />
+          </div>
+          <BarList rows={payload.analytics?.ai?.byType || []} />
+        </div>
+
+        <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 20, display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: c.black }}>Recent reliability issues</div>
+            <div style={{ marginTop: 4, fontSize: 13, color: c.sub }}>Sanitised errors only. No contract text, evidence or generated narratives.</div>
+          </div>
+          <div style={{ display: "grid", gap: 9 }}>
+            {(payload.analytics?.reliability?.errors || []).slice(0, 5).map((item: any, index: number) => (
+              <div key={`${item.created_at}-${index}`} style={{ border: `1px solid ${c.border}`, borderRadius: 14, padding: 12, display: "grid", gap: 4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: c.black }}>{item.error_type || item.event_name || item.route || "Error"}</span>
+                  <span style={{ fontSize: 11, color: c.sub }}>{niceDate(item.created_at)}</span>
+                </div>
+                <div style={{ fontSize: 12, color: c.sub, lineHeight: 1.45 }}>{item.sanitized_message || "No message recorded."}</div>
+              </div>
+            ))}
+            {(payload.analytics?.reliability?.errors || []).length === 0 ? <div style={{ fontSize: 13, color: c.sub }}>No analytics reliability issues recorded in the last 7 days.</div> : null}
+          </div>
+        </div>
       </section>
 
       <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 20, display: "grid", gap: 12 }}>

@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
-import { CONTRACT_TYPE_OPTIONS, getContractFamilyHint, type KnownContractType } from "@/lib/contracts";
+import { CONTRACT_TYPE_OPTIONS, getContractFamilyHint, requiresUploadedContract, type KnownContractType } from "@/lib/contracts";
 import { buildEventReference } from "@/lib/eventReference";
 import { getDefaultNoticePeriodDays } from "@/lib/commercialControl";
+import { AppSideCard, RingProgress } from "@/components/appUi";
+import CEProgress from "@/components/CEProgress";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
 
 type ContractType = KnownContractType;
 
@@ -16,6 +19,7 @@ type ProjectOption = {
   project_name: string;
   main_contractor: string;
   contract_type?: string | null;
+  trade_profile?: string | null;
 };
 
 const FIELD_GRID_STYLE = {
@@ -118,6 +122,8 @@ function normalizeContractType(value?: string | null): ContractType | null {
 
   const lower = raw.toLowerCase();
   if (lower.includes("jct")) return "jct_d_and_b_2016";
+  if (lower.includes("bespoke") || lower.includes("other")) return "bespoke_other";
+  if (lower.includes("unconfirmed") || lower.includes("unknown")) return "unconfirmed";
   if (lower.includes("nec4") && lower.includes("option a")) return "nec4_ecs_option_a";
   if (lower.includes("nec4") && lower.includes("option b")) return "nec4_ecs_option_b";
   if (lower.includes("nec")) return "nec4_ecs_option_b";
@@ -209,9 +215,15 @@ export default function NewEvent() {
     if (!projectName.trim()) return false;
     if (!mainContractor.trim()) return false;
     if (fromEwnConvertedEventId) return false;
-    if (contractSource === "upload_contract" && files.length === 0) return false;
+    if ((contractSource === "upload_contract" || requiresUploadedContract(contractType)) && files.length === 0) return false;
     return !loading;
-  }, [title, projectName, mainContractor, fromEwnConvertedEventId, contractSource, files, loading]);
+  }, [title, projectName, mainContractor, fromEwnConvertedEventId, contractSource, contractType, files, loading]);
+
+  useEffect(() => {
+    if (requiresUploadedContract(contractType)) {
+      setContractSource("upload_contract");
+    }
+  }, [contractType]);
 
   function applyProjectOption(value: string) {
     const clean = value.trim();
@@ -235,24 +247,31 @@ export default function NewEvent() {
         const user = data.session?.user;
         if (!user) return;
 
-        const res = await (supabase as any).from("projects")
-          .select("id,project_name,main_contractor,contract_type,updated_at")
+        let res = await (supabase as any).from("projects")
+          .select("id,project_name,main_contractor,contract_type,trade_profile,updated_at")
           .eq("user_id", user.id)
           .order("updated_at", { ascending: false });
+
+        if (res.error && /trade_profile|schema cache|column|does not exist/i.test(String(res.error.message || ""))) {
+          res = await (supabase as any).from("projects")
+            .select("id,project_name,main_contractor,contract_type,updated_at")
+            .eq("user_id", user.id)
+            .order("updated_at", { ascending: false });
+        }
 
         if (res.error) throw res.error;
         if (!active) return;
 
         const seen = new Set<string>();
         const next: ProjectOption[] = [];
-        for (const row of (res.data ?? []) as Array<{ id: string; project_name?: string | null; main_contractor?: string | null; contract_type?: string | null }>) {
+        for (const row of (res.data ?? []) as Array<{ id: string; project_name?: string | null; main_contractor?: string | null; contract_type?: string | null; trade_profile?: string | null }>) {
           const project_name = String(row.project_name ?? "").trim();
           if (!project_name) continue;
           const main_contractor = String(row.main_contractor ?? "").trim();
           const key = `${project_name.toLowerCase()}__${main_contractor.toLowerCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          next.push({ id: row.id, project_name, main_contractor, contract_type: row.contract_type ?? null });
+          next.push({ id: row.id, project_name, main_contractor, contract_type: row.contract_type ?? null, trade_profile: row.trade_profile ?? null });
         }
         setProjectOptions(next);
       } catch (error) {
@@ -373,6 +392,11 @@ export default function NewEvent() {
         setErr("This EWN has already been converted. Open the existing CE instead of creating another one.");
         return;
       }
+      if (requiresUploadedContract(contractType) && files.length === 0) {
+        setContractSource("upload_contract");
+        setErr("Upload the bespoke or unconfirmed contract before creating this CE so it does not use standard NEC/JCT wording.");
+        return;
+      }
 
       const supabase = supabaseBrowser();
       const { data } = await supabase.auth.getSession();
@@ -401,7 +425,7 @@ export default function NewEvent() {
       const cleanMainContractor = mainContractor.trim();
       let linkedProjectId = projectId;
 
-      const projectRes = await (supabase as any).from("projects")
+      let projectRes = await (supabase as any).from("projects")
         .upsert(
           {
             id: linkedProjectId ?? undefined,
@@ -409,6 +433,7 @@ export default function NewEvent() {
             project_name: cleanProjectName,
             main_contractor: cleanMainContractor,
             contract_type: contractType,
+            trade_profile: "general",
             status: "live",
             updated_at: new Date().toISOString(),
           },
@@ -416,6 +441,23 @@ export default function NewEvent() {
         )
         .select("id")
         .single();
+      if (projectRes.error && /trade_profile|schema cache|column|does not exist/i.test(String(projectRes.error.message || ""))) {
+        projectRes = await (supabase as any).from("projects")
+          .upsert(
+            {
+              id: linkedProjectId ?? undefined,
+              user_id: user.id,
+              project_name: cleanProjectName,
+              main_contractor: cleanMainContractor,
+              contract_type: contractType,
+              status: "live",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: linkedProjectId ? "id" : "user_id,project_name,main_contractor" }
+          )
+          .select("id")
+          .single();
+      }
       if (projectRes.error) throw projectRes.error;
       linkedProjectId = (projectRes.data as any)?.id as string;
       setProjectId(linkedProjectId);
@@ -457,7 +499,8 @@ export default function NewEvent() {
         main_contractor: cleanMainContractor,
         status: "draft",
         contract_type: contractType,
-        contract_source: contractSource,
+        contract_source: requiresUploadedContract(contractType) ? "upload_contract" : contractSource,
+        trade_profile: "general",
         event_number: nextEventNumber,
         event_reference: eventReference,
         project_id: linkedProjectId,
@@ -477,10 +520,13 @@ export default function NewEvent() {
       if (insertRes.error) {
         const message = String(insertRes.error.message || "");
         const optionalColumnMissing = /notice_period_days/i.test(message);
-        if (!optionalColumnMissing) throw insertRes.error;
+        const tradeProfileMissing = /trade_profile|schema cache|column|does not exist/i.test(message);
+        if (!optionalColumnMissing && !tradeProfileMissing) throw insertRes.error;
+
+        const { trade_profile: _tradeProfile, ...fallbackBasePayload } = basePayload;
 
         insertRes = await (supabase as any).from("events")
-          .insert([basePayload])
+          .insert([fallbackBasePayload])
           .select("id")
           .single();
       }
@@ -498,7 +544,7 @@ export default function NewEvent() {
         if (conversionUpdate.error) throw conversionUpdate.error;
       }
 
-      if (contractSource === "upload_contract" && files.length > 0) {
+      if ((contractSource === "upload_contract" || requiresUploadedContract(contractType)) && files.length > 0) {
         for (const file of files) {
           const safeName = file.name.replace(/[^\w.\- ]+/g, "_");
           const filePath = `${user.id}/${eventId}/${Date.now()}-${safeName}`;
@@ -600,6 +646,16 @@ export default function NewEvent() {
         } catch {}
       }
 
+      void trackAnalyticsWithUser(supabase, fromEwnId ? "ewn_converted_to_ce" : "ce_created", {
+        event_id: eventId,
+        project_id: linkedProjectId,
+        contract_type: contractType,
+        contract_source: requiresUploadedContract(contractType) ? "upload_contract" : contractSource,
+        trade_profile: "general",
+        from_ewn: Boolean(fromEwnId),
+        uploaded_contract_files: (contractSource === "upload_contract" || requiresUploadedContract(contractType)) ? files.length : 0,
+      });
+
       router.push(`/app/event/${eventId}`);
     } catch (e: unknown) {
       setErr(errorMessage(e, "Failed to create CE draft"));
@@ -609,14 +665,47 @@ export default function NewEvent() {
   }
 
   return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div className="app-form-with-rail" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 16, alignItems: "start" }}>
     <div
       style={{
         background: c.card,
         border: `1px solid ${c.border}`,
-        borderRadius: 22,
-        padding: 28,
+        borderRadius: 18,
+        padding: 22,
+        boxShadow: "0 10px 30px rgba(15,23,42,.045)",
       }}
     >
+      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22 }}>
+        <div
+          aria-hidden
+          style={{
+            width: 54,
+            height: 54,
+            borderRadius: 14,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(109, 74, 255, 0.1)",
+            color: "#6d4aff",
+            fontSize: 24,
+            fontWeight: 900,
+            flexShrink: 0,
+          }}
+        >
+          +
+        </div>
+        <div>
+          <h1 style={{ margin: 0, color: c.black, fontSize: 28, lineHeight: 1.08, fontWeight: 850 }}>
+            New CE
+          </h1>
+          <p style={{ margin: "8px 0 0", color: c.sub, fontSize: 14, lineHeight: 1.5 }}>
+            Create a new compensation event or variation and connect it to the right project, contractor and contract basis.
+          </p>
+        </div>
+      </div>
+
+      <CEProgress eventId="new" currentStep="setup" />
+
       <h1
         style={{
           fontSize: 24,
@@ -625,7 +714,7 @@ export default function NewEvent() {
           color: c.black,
         }}
       >
-        New CE
+        1. New CE
       </h1>
 
       <p
@@ -638,8 +727,7 @@ export default function NewEvent() {
           maxWidth: 760,
         }}
       >
-        Start with the CE title, then tie it to the project, main contractor and contract basis so
-        the dashboard and outputs stay commercially clear.
+        Set the CE up correctly before moving into Basis of Change, evidence and valuation build-up.
       </p>
 
       {fromEwnId ? (
@@ -756,7 +844,7 @@ export default function NewEvent() {
             <TextInput
               value={mainContractor}
               onChange={(e) => setMainContractor(e.target.value)}
-              placeholder="e.g. Skanska"
+              placeholder="e.g. Main contractor"
             />
           </label>
         </div>
@@ -776,7 +864,11 @@ export default function NewEvent() {
             <Label>Contract type</Label>
             <SelectInput
               value={contractType}
-              onChange={(e) => setContractType(e.target.value as ContractType)}
+              onChange={(e) => {
+                const value = e.target.value as ContractType;
+                setContractType(value);
+                if (requiresUploadedContract(value)) setContractSource("upload_contract");
+              }}
             >
               {CONTRACT_TYPE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -790,6 +882,7 @@ export default function NewEvent() {
             <Label>Contract source</Label>
             <SelectInput
               value={contractSource}
+              disabled={requiresUploadedContract(contractType)}
               onChange={(e) => {
                 const value = e.target.value as ContractSource;
                 setContractSource(value);
@@ -996,6 +1089,26 @@ export default function NewEvent() {
           {loading ? "Creating…" : fromEwnId ? "Create CE from EWN" : "Create draft"}
         </button>
       </div>
+    </div>
+    <aside style={{ display: "grid", gap: 14, position: "sticky", top: 92 }}>
+      <AppSideCard title="Commercial Readiness" tone="purple" icon="◎">
+        <div style={{ display: "grid", placeItems: "center", marginBottom: 12 }}><RingProgress value={0} tone="purple" label="Just started" size={112} /></div>
+        <div style={{ display: "grid", gap: 9 }}>
+          <span style={{ display: "flex", justifyContent: "space-between" }}>Narrative <strong>0%</strong></span>
+          <span style={{ display: "flex", justifyContent: "space-between" }}>Dates <strong>0%</strong></span>
+          <span style={{ display: "flex", justifyContent: "space-between" }}>Notice risk <strong>0%</strong></span>
+          <span style={{ display: "flex", justifyContent: "space-between" }}>Evidence <strong>0%</strong></span>
+          <span style={{ display: "flex", justifyContent: "space-between" }}>Resources <strong>0%</strong></span>
+        </div>
+      </AppSideCard>
+      <AppSideCard title="Commercial Coach" tone="purple" icon="i">
+        Start with a clear event title and the correct project and contract. These choices control the later notice, entitlement and valuation checks.
+      </AppSideCard>
+      <AppSideCard title="What's next?" tone="blue" icon="→">
+        Create the draft, then complete the event basis before uploading evidence and building the cost support.
+      </AppSideCard>
+    </aside>
+    </div>
     </div>
   );
 }

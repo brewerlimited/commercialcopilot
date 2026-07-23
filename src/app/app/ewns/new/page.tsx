@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { CONTRACT_TYPE_OPTIONS, getContractLabel } from "@/lib/contracts";
+import { AppPageHeader, AppSideCard, QuietButton } from "@/components/appUi";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
 
 const c = {
   card: "var(--surface)",
@@ -29,24 +31,6 @@ type GeneratedEwn = {
   narrative: string;
   consequences: string[];
   mitigation: string[];
-};
-
-type LocalEwnRow = {
-  id: string;
-  project_id: string | null;
-  title: string;
-  project_name: string;
-  main_contractor: string;
-  contract_type: string;
-  what_happened: string;
-  event_date: string | null;
-  location: string;
-  impact: string;
-  required_action: string;
-  evidence_summary: string;
-  generated_output: GeneratedEwn;
-  status: "open";
-  created_at: string;
 };
 
 type ProjectOption = {
@@ -122,58 +106,6 @@ function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
       }}
     />
   );
-}
-
-function makeGeneratedEwn(input: {
-  title: string;
-  whatHappened: string;
-  when: string;
-  where: string;
-  impact: string;
-  requiredAction: string;
-  evidence: string;
-}): GeneratedEwn {
-  const issue = input.whatHappened.trim() || input.title.trim() || "the matter identified on site";
-  const locationText = input.where.trim() ? ` at ${input.where.trim()}` : "";
-  const dateText = input.when.trim() ? ` on ${input.when.trim()}` : "";
-  const impactText = input.impact.trim() || "the matter may affect progress, productivity and the commercial position of the Subcontract Works";
-  const actionText = input.requiredAction.trim() || "confirmation of the required way forward";
-  const evidenceText = input.evidence.trim() || "site records, photographs, allocation sheets, correspondence and associated records";
-
-  return {
-    narrative: [
-      `During the progression of the Subcontract Works, the Subcontractor has identified ${issue}${locationText}${dateText}.`,
-      `The matter requires review as it may affect the planned method, sequence, productivity and/or safe delivery of the works. Based on the current information, the known impact is ${impactText}.`,
-      `The Subcontractor requires ${actionText} so that the matter can be reviewed, mitigated and progressed without avoidable delay.`,
-      "As it stands, there is a risk that the works cannot proceed as planned and that further time and/or cost impact may arise if the matter is not resolved within a reasonable timeframe.",
-      `Supporting records currently include ${evidenceText}.`,
-    ].join("\n\n"),
-    consequences: [
-      impactText,
-      "Possible disruption to planned sequence, productivity and programme if the matter is not resolved promptly.",
-      "Potential requirement for further commercial notification should the matter result in a recoverable change or impact.",
-    ],
-    mitigation: [
-      `The Subcontractor requires ${actionText} from the Contractor/design team as soon as reasonably practicable.`,
-      "The Subcontractor will continue to maintain records of labour, plant, materials, site constraints, correspondence and instructions relating to the matter.",
-      "Where practical, the Subcontractor will seek to mitigate delay and disruption without waiving entitlement to recover any resulting time or cost impact.",
-    ],
-  };
-}
-
-function readLocalEwns(): LocalEwnRow[] {
-  try {
-    const raw = localStorage.getItem("cc.ewns");
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveLocalEwn(row: LocalEwnRow) {
-  const existing = readLocalEwns().filter((item) => item.id !== row.id);
-  localStorage.setItem("cc.ewns", JSON.stringify([row, ...existing]));
 }
 
 export default function NewEwnPage() {
@@ -274,61 +206,42 @@ export default function NewEwnPage() {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
 
-      if (token) {
-        const res = await fetch("/api/generate-ewn", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            id: savedId,
-            projectId,
-            title,
-            projectName,
-            mainContractor,
-            contractType,
-            whatHappened,
-            when,
-            where,
-            impact,
-            requiredAction,
-            evidence,
-          }),
-        });
+      if (!token) throw new Error("Sign in before generating an EWN draft.");
 
-        const payload = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(payload?.error || "Failed to generate EWN");
+      const res = await fetch("/api/generate-ewn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          id: savedId,
+          projectId,
+          title,
+          projectName,
+          mainContractor,
+          contractType,
+          whatHappened,
+          when,
+          where,
+          impact,
+          requiredAction,
+          evidence,
+        }),
+      });
 
-        setGenerated(payload.generated_output as GeneratedEwn);
-        setSavedId(payload.id as string);
-        if (payload.project_id) setProjectId(payload.project_id as string);
-        return;
-      }
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.error || "Failed to generate EWN");
 
-      const output = makeGeneratedEwn({ title, whatHappened, when, where, impact, requiredAction, evidence });
-      setGenerated(output);
-
-      const row = {
-        id: savedId || crypto.randomUUID(),
-        project_id: projectId,
-        title: title.trim(),
-        project_name: projectName.trim(),
-        main_contractor: mainContractor.trim(),
+      setGenerated(payload.generated_output as GeneratedEwn);
+      setSavedId(payload.id as string);
+      if (payload.project_id) setProjectId(payload.project_id as string);
+      void trackAnalyticsWithUser(supabase, "ewn_created", {
+        ewn_id: payload.id,
+        project_id: payload.project_id || projectId,
         contract_type: contractType,
-        what_happened: whatHappened.trim(),
-        event_date: when || null,
-        location: where.trim(),
-        impact: impact.trim(),
-        required_action: requiredAction.trim(),
-        evidence_summary: evidence.trim(),
-        generated_output: output,
-        status: "open" as const,
-        created_at: new Date().toISOString(),
-      };
-
-      saveLocalEwn(row);
-      setSavedId(row.id);
+        status: "open",
+      });
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Failed to generate EWN");
     } finally {
@@ -354,19 +267,18 @@ export default function NewEwnPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: 18 }}>
-      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 28 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 800, color: c.sub, textTransform: "uppercase", letterSpacing: 0.6 }}>Early Warning Notice</div>
-            <h1 style={{ fontSize: 24, fontWeight: 700, margin: "6px 0 0", color: c.black }}>New EWN</h1>
-            <p style={{ margin: "8px 0 0", color: c.sub, fontSize: 13, lineHeight: 1.55, maxWidth: 780 }}>
-              Log the issue quickly, generate a clean early warning narrative, then convert it into a CE if the commercial impact develops.
-            </p>
-          </div>
-          <Link href="/app/ewns" style={{ border: `1px solid ${c.border}`, background: c.soft, color: c.black, borderRadius: 14, padding: "11px 13px", textDecoration: "none", fontWeight: 800, fontSize: 13 }}>
-            View EWN register
-          </Link>
+    <div style={{ display: "grid", gap: 16 }}>
+      <AppPageHeader
+        eyebrow="Early Warning Notice"
+        title="New EWN"
+        description="Log the facts as early as possible, keep the notice clear, and preserve the route into a CE if the commercial impact develops."
+        actions={<QuietButton href="/app/ewns">View EWN register</QuietButton>}
+      />
+      <div className="app-form-with-rail" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 16, alignItems: "start" }}>
+      <div style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 18, padding: 22, boxShadow: "0 10px 30px rgba(15,23,42,.045)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, paddingBottom: 16, borderBottom: `1px solid ${c.border}` }}>
+          <span style={{ width: 38, height: 38, borderRadius: 12, display: "grid", placeItems: "center", background: "#f3efff", color: "#6d4aff", fontWeight: 800 }}>1</span>
+          <div><div style={{ fontSize: 16, fontWeight: 750, color: c.text }}>EWN details</div><div style={{ marginTop: 3, fontSize: 12, color: c.sub }}>Capture the key information about this early warning.</div></div>
         </div>
 
         <div style={{ display: "grid", gap: 16, marginTop: 22 }}>
@@ -454,6 +366,23 @@ export default function NewEwnPage() {
             {saving ? "Generating…" : savedId ? "Regenerate EWN" : "Generate EWN"}
           </button>
         </div>
+      </div>
+      <aside style={{ display: "grid", gap: 14, position: "sticky", top: 92 }}>
+        <AppSideCard title="About Early Warning Notices" tone="purple" icon="i">
+          An EWN records a developing risk early, even where the full impact is not yet known. That creates a clear audit trail and supports proactive management.
+        </AppSideCard>
+        <AppSideCard title="Tips for a good EWN" tone="green" icon="✓">
+          <div style={{ display: "grid", gap: 9 }}>
+            <span>✓ Be clear and concise</span>
+            <span>✓ Capture facts, not opinions</span>
+            <span>✓ Record it as early as possible</span>
+            <span>✓ Link it to the right project</span>
+          </div>
+        </AppSideCard>
+        <AppSideCard title="What happens next?" tone="blue" icon="→">
+          Once saved, keep the EWN updated or convert it into a CE with the project and event facts carried forward.
+        </AppSideCard>
+      </aside>
       </div>
 
       {generated ? (

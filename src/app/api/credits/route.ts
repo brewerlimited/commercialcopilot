@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { getAuthUserFromRequest } from "@/lib/apiAuth";
+import { getProtectedGenerationAccess } from "@/lib/accessControl";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
         .eq("user_id", user.id)
         .maybeSingle(),
       (admin as any).from("profiles")
-        .select("is_admin_unlimited, credits_remaining, subscription_status")
+        .select("is_admin_unlimited, credits_remaining, subscription_status, account_status")
         .eq("id", user.id)
         .maybeSingle(),
     ]);
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
       creditRow.credits_remaining ?? profile.credits_remaining,
       0
     );
+    const generationAccess = getProtectedGenerationAccess(profile, creditsRemaining);
 
     return NextResponse.json({
       success: true,
@@ -50,6 +52,10 @@ export async function GET(req: NextRequest) {
       creditsRemaining,
       isAdminUnlimited: Boolean(profile.is_admin_unlimited),
       subscriptionStatus: profile.subscription_status || null,
+      accountStatus: generationAccess.accountStatus,
+      generationAllowed: generationAccess.allowed,
+      generationGateCode: generationAccess.code,
+      generationGateMessage: generationAccess.allowed ? null : generationAccess.message,
       source: creditRow.credits_remaining !== undefined ? "user_credits" : "profiles",
     });
   } catch (error: any) {

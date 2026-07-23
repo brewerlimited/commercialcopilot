@@ -1,5 +1,6 @@
-import { getContractFamily, getContractLabel } from "@/lib/contracts";
+import { getContractFamily, getContractLabel, getContractLanguageInstruction } from "@/lib/contracts";
 import { getDraftTemplateForContractType } from "@/lib/draftTemplates";
+import { getTradeProfile, normaliseTradeProfile } from "@/lib/tradeProfiles";
 import {
   COMPANY_PROFILE_SELECT,
   cleanCompanyProfile,
@@ -17,6 +18,15 @@ function num(value: unknown, fallback = 0) {
 
 function text(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function clientText(value: unknown) {
+  return text(value)
+    .replace(/\bDemo seed note:\s*/gi, "")
+    .replace(/\bSeeded\s+[a-z ]+\s+note:\s*/gi, "")
+    .replace(/\bFor demo testing\.?\s*/gi, "")
+    .replace(/\bDemo testing\.?\s*/gi, "")
+    .trim();
 }
 
 function compactObject<T extends Record<string, any>>(obj: T): T {
@@ -37,6 +47,23 @@ function sum(lines: any[], predicate: (line: any) => boolean) {
 
 function lower(value: unknown) {
   return String(value ?? "").toLowerCase();
+}
+
+function normaliseResourceCategory(line: any) {
+  const raw = lower(line?.category).trim();
+  const textValue = `${line?.item_name || ""} ${line?.notes || ""}`.toLowerCase();
+
+  if (raw === "equipment") return "plant";
+  if (raw === "materials") return "material";
+  if (raw === "charge" || raw === "charges") return "subcontract";
+  if (
+    raw === "material" &&
+    /\b(subcontract|third[-\s]?party|utility|permit|standby|specialist|supplier attendance|attendance charge|call[-\s]?out)\b/.test(textValue)
+  ) {
+    return "subcontract";
+  }
+
+  return raw;
 }
 
 function isTextLikeFile(file: any) {
@@ -364,7 +391,7 @@ async function fetchEvent(
   userId: string,
 ) {
   const selectWithSummary =
-    "id,user_id,title,status,created_at,delay_days,contract_type,contract_source,project_name,main_contractor,event_financial_summary";
+    "id,user_id,title,status,created_at,delay_days,contract_type,contract_source,project_name,main_contractor,trade_profile,event_financial_summary";
   const selectFallback =
     "id,user_id,title,status,created_at,delay_days,contract_type,contract_source,project_name,main_contractor";
 
@@ -377,6 +404,17 @@ async function fetchEvent(
   if (!primary.error) return primary;
 
   const message = String(primary.error.message || "");
+  const missingTradeProfile =
+    /trade_profile/i.test(message) &&
+    /does not exist|schema cache|column/i.test(message);
+  if (missingTradeProfile) {
+    return (admin as any).from("events")
+      .select(selectFallback)
+      .eq("id", eventId)
+      .eq("user_id", userId)
+      .maybeSingle();
+  }
+
   const missingSummary =
     /event_financial_summary/i.test(message) &&
     /does not exist|schema cache|column/i.test(message);
@@ -484,6 +522,9 @@ export async function buildGenerateDraftPayload(params: {
   const contractLabel = getContractLabel(event.contract_type);
   const draftTemplate = getDraftTemplateForContractType(event.contract_type);
   const isJct = contractFamily === "JCT";
+  const tradeProfile = getTradeProfile(
+    (event as any).trade_profile || (companyProfile as any).trade_profile || "general",
+  );
 
   const contractExtractionResults = await Promise.all(
     contractFiles.map((file: any) => extractContractFileText(admin, file)),
@@ -524,16 +565,24 @@ export async function buildGenerateDraftPayload(params: {
 
   const financialSummary = (event as any).event_financial_summary || {};
 
-  const labourLines = resourceRows.filter(
+  const normalisedResourceRows = resourceRows.map((line: any) => ({
+    ...line,
+    category: normaliseResourceCategory(line),
+    original_category: line.category,
+    item_name: clientText(line.item_name),
+    notes: clientText(line.notes),
+    linked_event: clientText(line.linked_event),
+  }));
+  const labourLines = normalisedResourceRows.filter(
     (line: any) => line.category === "labour",
   );
-  const plantLines = resourceRows.filter(
+  const plantLines = normalisedResourceRows.filter(
     (line: any) => line.category === "plant",
   );
-  const materialLines = resourceRows.filter(
+  const materialLines = normalisedResourceRows.filter(
     (line: any) => line.category === "material",
   );
-  const subcontractLines = resourceRows.filter(
+  const subcontractLines = normalisedResourceRows.filter(
     (line: any) => line.category === "subcontract",
   );
   const staffPrelims = prelimRows.filter(
@@ -544,27 +593,12 @@ export async function buildGenerateDraftPayload(params: {
   );
 
   const resourceTotals = {
-    labour_total: num(
-      financialSummary.labour_total,
-      sum(resourceRows, (line) => line.category === "labour"),
-    ),
-    plant_total: num(
-      financialSummary.plant_total,
-      sum(resourceRows, (line) => line.category === "plant"),
-    ),
-    materials_total: num(
-      financialSummary.materials_total,
-      sum(resourceRows, (line) => line.category === "material"),
-    ),
-    subcontract_total: num(
-      financialSummary.subcontract_total,
-      sum(resourceRows, (line) => line.category === "subcontract"),
-    ),
-    defined_cost_total: num(
-      financialSummary.defined_cost_total,
-      sum(resourceRows, (line) =>
-        ["labour", "plant", "material", "subcontract"].includes(line.category),
-      ),
+    labour_total: sum(normalisedResourceRows, (line) => line.category === "labour"),
+    plant_total: sum(normalisedResourceRows, (line) => line.category === "plant"),
+    materials_total: sum(normalisedResourceRows, (line) => line.category === "material"),
+    subcontract_total: sum(normalisedResourceRows, (line) => line.category === "subcontract"),
+    defined_cost_total: sum(normalisedResourceRows, (line) =>
+      ["labour", "plant", "material", "subcontract"].includes(line.category),
     ),
     prelims_total: num(financialSummary.prelims_total),
     staff_prelims_total: num(financialSummary.staff_prelims_total),
@@ -652,7 +686,19 @@ export async function buildGenerateDraftPayload(params: {
         ? "Review the uploaded contract text and selected contract form together. Use clause references only where supported by the contract text and event facts. Treat uploaded project contract documents, Z clauses, bespoke amendments, subcontract terms, scope documents, appendices and T&Cs as higher-priority project-specific contract context where relevant."
         : contractFiles.length > 0
           ? `Contract file(s) were uploaded but no readable contract text reached the AI payload. Extraction warnings: ${contractExtractionWarnings.join(" | ") || "No readable text extracted."} Use the selected standard form cautiously and state this limitation in assumptions/internal commercial intelligence rather than guessing.`
-          : "No extracted contract text is available. Use the selected standard form cautiously and state any limitations where clause certainty depends on contract amendments.",
+          : contractFamily === "BESPOKE" || contractFamily === "UNCONFIRMED"
+            ? "No extracted contract text is available for a bespoke/unconfirmed contract. Do not invent clause references and do not default to NEC or JCT terminology. Use neutral subcontract recovery language and state that contract wording must be confirmed."
+            : "No extracted contract text is available. Use the selected standard form cautiously and state any limitations where clause certainty depends on contract amendments.",
+    },
+    trade_profile: {
+      key: tradeProfile.key,
+      label: tradeProfile.label,
+      description: tradeProfile.description,
+      evidence_focus: tradeProfile.evidenceFocus,
+      resource_focus: tradeProfile.resourceFocus,
+      programme_focus: tradeProfile.programmeFocus,
+      commercial_risks: tradeProfile.commercialRisks,
+      instruction_for_ai: tradeProfile.promptContext,
     },
     company_profile: {
       company_name: companyProfile.company_name || "",
@@ -665,6 +711,7 @@ export async function buildGenerateDraftPayload(params: {
       vat_number: companyProfile.vat_number || "",
       company_registration_number:
         companyProfile.company_registration_number || "",
+      trade_profile: normaliseTradeProfile((companyProfile as any).trade_profile),
       instruction_for_ai: submittingPartyName
         ? "Use company_profile as the authoritative source for the submitting party identity. Do not infer or invent the company name, trading name, address, logo or role."
         : "No company profile has been set. Do not infer the submitting party identity; state this limitation where relevant.",
@@ -673,6 +720,7 @@ export async function buildGenerateDraftPayload(params: {
       project_name: event.project_name || "",
       contractor: event.main_contractor || "",
       subcontractor: submittingPartyLegalName || submittingPartyName || "",
+      trade_profile: tradeProfile.key,
     },
     event: {
       id: event.id,
@@ -680,14 +728,15 @@ export async function buildGenerateDraftPayload(params: {
       status: event.status || "draft",
       created_at: event.created_at || null,
       delay_days: num(event.delay_days, 0),
+      trade_profile: tradeProfile.key,
     },
     basis_of_change: {
-      what_happened: basis.happened_summary || "",
+      what_happened: clientText(basis.happened_summary),
       cause_type: basis.cause_type || "",
-      cause: basis.cause_summary || "",
-      difference_from_planned_basis: basis.difference_from_plan || "",
+      cause: clientText(basis.cause_summary),
+      difference_from_planned_basis: clientText(basis.difference_from_plan),
       mechanism_tags: safeArray<string>(basis.mechanism_tags),
-      mitigation: basis.mitigation_summary || "",
+      mitigation: clientText(basis.mitigation_summary),
       time_impact_toggle: basis.time_impact_toggle || "unsure",
     },
     programme: {
@@ -705,10 +754,10 @@ export async function buildGenerateDraftPayload(params: {
     evidence: evidenceRows.map((file: any) => ({
       id: file.id,
       category: file.category,
-      file_name: file.file_name,
-      description: file.description || "",
+      file_name: clientText(file.file_name).replace(/^DEMO[-_\s]+/i, ""),
+      description: clientText(file.description),
       evidence_date: file.evidence_date || null,
-      relates_to: file.relates_to || "",
+      relates_to: clientText(file.relates_to),
       mime_type: file.mime_type || "",
       created_at: file.created_at || null,
     })),
@@ -718,8 +767,8 @@ export async function buildGenerateDraftPayload(params: {
       plant: plantLines,
       materials: materialLines,
       subcontract: subcontractLines,
-      all_lines: resourceRows,
-      activity_breakdown: resourceRows.reduce(
+      all_lines: normalisedResourceRows,
+      activity_breakdown: normalisedResourceRows.reduce(
         (acc: Record<string, any[]>, line: any) => {
           const key = text(line.linked_event) || "General activity";
           acc[key] = acc[key] || [];
@@ -780,9 +829,8 @@ export async function buildGenerateDraftPayload(params: {
       conclusion: ["Summary", "Basis of Change"],
     },
     ai_instructions: {
-      contract_language: isJct
-        ? "Use JCT-appropriate language. Do not use NEC-specific phrases such as Defined Cost unless explaining why they are not applicable."
-        : "Use NEC-appropriate language including Defined Cost and programme effect where supported.",
+      contract_language: getContractLanguageInstruction(event.contract_type),
+      trade_language: tradeProfile.promptContext,
       clause_instruction:
         "Consider all relevant clauses in the selected contract form and any uploaded contract text. Reference only clauses that are supported by the facts and contract information. If uncertain, state the limitation in assumptions or internal_commercial_intelligence, without creating a separate risks and qualifications section.",
       company_identity_instruction:

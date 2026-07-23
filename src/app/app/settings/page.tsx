@@ -25,6 +25,9 @@ const c = {
   soft: "var(--surface-soft)",
   black: "var(--accent)",
   accentContrast: "var(--accent-contrast)",
+  purple: "var(--purple, #6d4aff)",
+  purpleSoft: "var(--purple-soft, #f3efff)",
+  purpleBorder: "var(--purple-border, #ddd4ff)",
   input: "var(--surface-input)",
 };
 
@@ -132,9 +135,9 @@ function OptionButton({
         height: 40,
         padding: "0 14px",
         borderRadius: 12,
-        border: `1px solid ${active ? c.black : c.border}`,
-        background: active ? c.black : c.input,
-        color: active ? c.accentContrast : c.text,
+        border: `1px solid ${active ? c.purpleBorder : c.border}`,
+        background: active ? c.purpleSoft : c.input,
+        color: active ? c.purple : c.text,
         fontWeight: 700,
         cursor: "pointer",
       }}
@@ -162,8 +165,8 @@ function AppearanceThemeCard({
       aria-pressed={active}
       style={{
         textAlign: "left",
-        border: `1px solid ${active ? c.black : c.border}`,
-        background: active ? "var(--accent-soft)" : c.input,
+        border: `1px solid ${active ? c.purpleBorder : c.border}`,
+        background: active ? c.purpleSoft : c.input,
         borderRadius: 16,
         padding: 14,
         display: "grid",
@@ -192,7 +195,7 @@ function AppearanceThemeCard({
         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: c.text }}>{theme.name}</div>
           {active ? (
-            <span style={{ fontSize: 11, fontWeight: 800, color: c.black }}>Selected</span>
+            <span style={{ fontSize: 11, fontWeight: 800, color: c.purple }}>Selected</span>
           ) : resolved ? (
             <span style={{ fontSize: 11, fontWeight: 800, color: c.sub }}>Active</span>
           ) : null}
@@ -234,7 +237,7 @@ export default function SettingsPage() {
 
       const [{ data: profile }, { data: creditRow }] = await Promise.all([
         (supabase as any).from("profiles")
-          .select("plan_type, subscription_status, stripe_customer_id, stripe_subscription_id, current_period_end, is_admin_unlimited, credits_remaining")
+          .select("plan_type, subscription_status, account_status, stripe_customer_id, stripe_subscription_id, current_period_end, is_admin_unlimited, credits_remaining")
           .eq("id", user.id)
           .maybeSingle(),
         (supabase as any).from("user_credits").select("credits_remaining").eq("user_id", user.id).maybeSingle(),

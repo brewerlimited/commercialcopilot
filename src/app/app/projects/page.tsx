@@ -8,6 +8,7 @@ import { getContractLabel } from "@/lib/contracts";
 import { displayEventTitle } from "@/lib/eventReference";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
 import { normaliseCommercialStatus, normalisePaymentStatus } from "@/lib/commercialControl";
+import { AppCard, AppPageHeader, MetricCard, PrimaryButton, QuietButton, toneColours } from "@/components/appUi";
 
 type ProjectRow = {
   id: string;
@@ -56,6 +57,16 @@ type EwnRow = {
   main_contractor?: string | null;
 };
 
+const PROJECT_STATUS_OPTIONS = [
+  { value: "live", label: "Live", tone: "green" },
+  { value: "dormant", label: "Dormant", tone: "orange" },
+  { value: "defects", label: "Defects", tone: "purple" },
+  { value: "closed", label: "Closed", tone: "neutral" },
+] as const;
+
+type ProjectStatusValue = (typeof PROJECT_STATUS_OPTIONS)[number]["value"];
+type AppTone = "neutral" | "purple" | "blue" | "green" | "orange" | "red" | "pink";
+
 const c = {
   card: "var(--surface)",
   input: "var(--surface-input)",
@@ -71,9 +82,6 @@ const c = {
   greenBg: "var(--green-bg)",
   greenBd: "var(--green-border)",
   greenTx: "var(--green-text)",
-  amberBg: "var(--amber-bg)",
-  amberBd: "var(--amber-border)",
-  amberTx: "var(--amber-text)",
   blueBg: "var(--blue-bg)",
   blueBd: "var(--blue-border)",
   blueTx: "var(--blue-text)",
@@ -166,9 +174,15 @@ function isOverdue(event: EventRow) {
 }
 
 function statusTone(status?: string | null) {
-  if (status === "closed") return { bg: c.soft, bd: c.border, tx: c.sub };
-  if (status === "dormant" || status === "defects") return { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx };
-  return { bg: c.greenBg, bd: c.greenBd, tx: c.greenTx };
+  const option = PROJECT_STATUS_OPTIONS.find((item) => item.value === status);
+  const tone = (option?.tone ?? "green") as AppTone;
+  const colors = toneColours(tone);
+  return { bg: colors.bg, bd: colors.border, tx: colors.text, tone };
+}
+
+function projectActionColours(tone: "neutral" | "purple" | "blue" | "green" | "orange" | "red" | "pink") {
+  const colors = toneColours(tone);
+  return { bg: colors.bg, bd: colors.border, tx: colors.text };
 }
 
 function nextProjectAction(events: EventRow[], ewns: EwnRow[]) {
@@ -177,12 +191,12 @@ function nextProjectAction(events: EventRow[], ewns: EwnRow[]) {
   if (overdue) return { label: "Chase overdue payment", detail: `${displayEventTitle(overdue)} • ${money(outstandingValue(overdue))}`, href: `/app?trackPayment=${overdue.id}`, tone: "red" as const };
 
   const openEwn = ewns.find((ewn) => ewn.status !== "converted" && ewn.status !== "closed");
-  if (openEwn) return { label: "Review open EWN", detail: openEwn.title || "Open early warning", href: `/app/ewns?ewn=${openEwn.id}`, tone: "amber" as const };
+  if (openEwn) return { label: "Review open EWN", detail: openEwn.title || "Open early warning", href: `/app/ewns?ewn=${openEwn.id}`, tone: "orange" as const };
 
   const draft = activeEvents.find((event) => ["draft", "review", "ready"].includes(normaliseCommercialStatus(event.status)));
   if (draft) return { label: "Continue CE pack", detail: displayEventTitle(draft), href: `/app/event/${draft.id}`, tone: "blue" as const };
 
-  return { label: "Commercially quiet", detail: "No immediate recovery action flagged.", href: "/app/new", tone: "neutral" as const };
+  return { label: "Commercially quiet", detail: "No immediate recovery action flagged.", href: "/app/new", tone: "green" as const };
 }
 
 export default function ProjectsPage() {
@@ -194,6 +208,7 @@ export default function ProjectsPage() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("live");
   const [err, setErr] = useState<string | null>(null);
+  const [savingStatusId, setSavingStatusId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -324,41 +339,67 @@ export default function ProjectsPage() {
     );
   }, [projectSummaries]);
 
-  return (
-    <div style={{ display: "grid", gap: 18 }}>
-      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 26 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "start", flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: c.sub, textTransform: "uppercase", letterSpacing: "0.02em" }}>Commercial projects</div>
-            <h1 style={{ margin: "6px 0 0", color: c.black, fontSize: 26, letterSpacing: 0, lineHeight: 1.15 }}>Projects</h1>
-            <p style={{ margin: "8px 0 0", color: c.sub, fontSize: 13, lineHeight: 1.55, maxWidth: 780 }}>Project-level recovery, payment and EWN control across live jobs.</p>
-          </div>
-          <Link href="/app/projects/new" style={{ border: `1px solid ${c.black}`, background: c.black, color: c.blackContrast, borderRadius: 14, padding: "12px 14px", textDecoration: "none", fontWeight: 800, fontSize: 13 }}>
-            + New Project
-          </Link>
-        </div>
-      </section>
+  async function updateProjectStatus(projectId: string, nextStatus: ProjectStatusValue) {
+    const previous = projects.find((project) => project.id === projectId) ?? null;
+    if (!previous || previous.status === nextStatus) return;
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
+    setErr(null);
+    setSavingStatusId(projectId);
+    setProjects((prev) => prev.map((project) => (
+      project.id === projectId ? { ...project, status: nextStatus, updated_at: new Date().toISOString() } : project
+    )));
+
+    try {
+      const supabase = supabaseBrowser();
+      const user = await getRequiredUser(supabase);
+      const update = await (supabase as any)
+        .from("projects")
+        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .eq("id", projectId)
+        .eq("user_id", user.id);
+      if (update.error) throw update.error;
+    } catch (error) {
+      setProjects((prev) => prev.map((project) => (project.id === projectId ? previous : project)));
+      const message = error instanceof Error ? error.message : "Project status could not be saved.";
+      setErr(/status|schema cache|column/i.test(message)
+        ? "Project status could not be saved. Run the projects status SQL patch, then try again."
+        : message);
+    } finally {
+      setSavingStatusId(null);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <AppPageHeader
+        eyebrow="Commercial projects"
+        title="Projects"
+        description="Project-level recovery, payment and EWN control across live jobs."
+        actions={<PrimaryButton href="/app/projects/new">+ New Project</PrimaryButton>}
+      />
+
+      <div className="app-project-metrics" style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>
         {[
-          ["Recoverable", money(totals.recoverable), "All CE value"],
-          ["Outstanding", money(totals.outstanding), "Unpaid balance"],
-          ["Paid", money(totals.paid), "Recovered value"],
-          ["Overdue CEs", totals.overdue, "Payment risk"],
-          ["Open EWNs", totals.openEwns, "May become CEs"],
-        ].map(([label, value, hint]) => (
-          <div key={String(label)} style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 18, padding: 18, minHeight: 112 }}>
-            <div style={{ color: c.sub, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.02em" }}>{label}</div>
-            <div style={{ marginTop: 14, color: c.black, fontSize: 25, fontWeight: 800, letterSpacing: 0, lineHeight: 1.08 }}>{value}</div>
-            <div style={{ marginTop: 6, color: c.sub, fontSize: 12, fontWeight: 650 }}>{hint}</div>
-          </div>
+          ["Recoverable value", money(totals.recoverable), "All live projects", "green"],
+          ["Outstanding", money(totals.outstanding), "Unpaid balance", "blue"],
+          ["Recovered", money(totals.paid), "Value paid", "green"],
+          ["Overdue CEs", totals.overdue, "Payment risk", "red"],
+          ["Open EWNs", totals.openEwns, "Potential change", "purple"],
+        ].map(([label, value, hint, tone]) => (
+          <MetricCard
+            key={String(label)}
+            label={String(label)}
+            value={value}
+            hint={String(hint)}
+            tone={tone as "green" | "blue" | "red" | "purple"}
+          />
         ))}
       </div>
 
-      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 18 }}>
+      <AppCard style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", gap: 10 }}>
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search projects..." style={{ border: `1px solid ${c.border}`, background: c.input, color: c.text, borderRadius: 14, padding: "12px 13px", fontWeight: 700 }} />
-          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ border: `1px solid ${c.border}`, background: c.input, color: c.text, borderRadius: 14, padding: "12px 13px", fontWeight: 800 }}>
+          <input className="app-control" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search projects..." style={{ margin: "16px 0 16px 16px", padding: "0 13px", fontWeight: 650 }} />
+          <select className="app-control" value={status} onChange={(e) => setStatus(e.target.value)} style={{ margin: "16px 16px 16px 0", padding: "0 13px", fontWeight: 700 }}>
             <option value="all">All statuses</option>
             <option value="live">Live</option>
             <option value="dormant">Dormant</option>
@@ -369,7 +410,7 @@ export default function ProjectsPage() {
 
         {err ? <div style={{ marginTop: 12, border: `1px solid ${c.redBd}`, background: c.redBg, color: c.redTx, borderRadius: 14, padding: 12, fontWeight: 800 }}>{err}</div> : null}
 
-        <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+        <div style={{ borderTop: `1px solid ${c.border}` }}>
           {loading ? (
             <div style={{ padding: 18, color: c.sub, fontWeight: 800 }}>Loading projects...</div>
           ) : filtered.length === 0 ? (
@@ -377,50 +418,53 @@ export default function ProjectsPage() {
           ) : (
             filtered.map((row) => {
               const tone = statusTone(row.project.status);
-              const actionTone = row.nextAction.tone === "red" ? { bg: c.redBg, bd: c.redBd, tx: c.redTx } : row.nextAction.tone === "amber" ? { bg: c.amberBg, bd: c.amberBd, tx: c.amberTx } : row.nextAction.tone === "blue" ? { bg: c.blueBg, bd: c.blueBd, tx: c.blueTx } : { bg: c.soft, bd: c.border, tx: c.sub };
+              const actionTone = projectActionColours(row.nextAction.tone);
+              const orangeTone = projectActionColours("orange");
               return (
-                <Link key={row.project.id} href={`/app/projects/${row.project.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-                  <article style={{ border: `1px solid ${c.border}`, background: c.soft, borderRadius: 18, padding: 16, display: "grid", gap: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "start" }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ color: c.black, fontSize: 18, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.project.project_name}</div>
-                        <div style={{ marginTop: 5, color: c.sub, fontSize: 13, fontWeight: 700 }}>{row.project.main_contractor || "Contractor not set"} • {getContractLabel(row.project.contract_type)}</div>
+                  <article key={row.project.id} className="app-list-row app-project-row" style={{ borderBottom: `1px solid ${c.border}`, padding: 16, display: "grid", gridTemplateColumns: "minmax(250px, 1.4fr) 70px repeat(4, minmax(90px, .55fr)) minmax(230px, 1fr) 128px 104px", gap: 14, alignItems: "center" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 99, background: tone.tx, flex: "0 0 auto" }} />
+                        <Link href={`/app/projects/${row.project.id}`} style={{ color: c.text, fontSize: 15, fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "none" }}>{row.project.project_name}</Link>
                       </div>
-                      <span style={{ border: `1px solid ${tone.bd}`, background: tone.bg, color: tone.tx, borderRadius: 999, padding: "7px 10px", fontSize: 12, fontWeight: 800, textTransform: "capitalize" }}>{row.project.status || "live"}</span>
+                      <div style={{ margin: "5px 0 0 16px", color: c.sub, fontSize: 12, fontWeight: 550 }}>{row.project.main_contractor || "Contractor not set"} • {getContractLabel(row.project.contract_type)}</div>
                     </div>
-
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 8 }}>
-                      <Mini label="CEs" value={row.events.length} />
-                      <Mini label="EWNs" value={row.openEwns.length} />
-                      <Mini label="Recoverable" value={money(row.recoverable)} />
-                      <Mini label="Submitted" value={money(row.submitted)} />
-                      <Mini label="Outstanding" value={money(row.outstanding)} />
-                      <Mini label="Overdue" value={row.overdue.length} />
+                    <Mini label="CEs" value={row.events.length} bare />
+                    <Mini label="Recoverable" value={money(row.recoverable)} bare tone={c.greenTx} />
+                    <Mini label="Submitted" value={money(row.submitted)} bare tone={c.blueTx} />
+                    <Mini label="Outstanding" value={money(row.outstanding)} bare tone={orangeTone.tx} />
+                    <Mini label="Overdue" value={row.overdue.length} bare tone={row.overdue.length ? c.redTx : c.text} />
+                    <div style={{ border: `1px solid ${actionTone.bd}`, background: actionTone.bg, color: actionTone.tx, borderRadius: 12, padding: "10px 12px", minWidth: 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 750, textTransform: "uppercase" }}>Next action</div>
+                      <div style={{ marginTop: 3, fontSize: 12, lineHeight: 1.35, fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis" }}>{row.nextAction.label}</div>
                     </div>
-
-                    <div style={{ border: `1px solid ${actionTone.bd}`, background: actionTone.bg, color: actionTone.tx, borderRadius: 14, padding: 12, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.02em" }}>Next action</div>
-                        <div style={{ marginTop: 4, fontSize: 13, fontWeight: 700 }}>{row.nextAction.label}: {row.nextAction.detail}</div>
-                      </div>
-                      <span style={{ fontWeight: 800, whiteSpace: "nowrap" }}>Open →</span>
-                    </div>
+                    <select
+                      className="app-control"
+                      value={(row.project.status || "live") as ProjectStatusValue}
+                      disabled={savingStatusId === row.project.id}
+                      onChange={(e) => void updateProjectStatus(row.project.id, e.target.value as ProjectStatusValue)}
+                      style={{ height: 38, padding: "0 10px", borderColor: tone.bd, background: tone.bg, color: tone.tx, fontWeight: 800 }}
+                    >
+                      {PROJECT_STATUS_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <QuietButton href={`/app/projects/${row.project.id}`} style={{ height: 38, borderRadius: 12, padding: "0 12px" }}>Open →</QuietButton>
                   </article>
-                </Link>
               );
             })
           )}
         </div>
-      </section>
+      </AppCard>
     </div>
   );
 }
 
-function Mini({ label, value }: { label: string; value: React.ReactNode }) {
+function Mini({ label, value, bare = false, tone = c.text }: { label: string; value: React.ReactNode; bare?: boolean; tone?: string }) {
   return (
-    <div style={{ border: `1px solid ${c.border}`, background: c.input, borderRadius: 14, padding: 10, minHeight: 70 }}>
+    <div style={bare ? { minWidth: 0 } : { border: `1px solid ${c.border}`, background: c.input, borderRadius: 14, padding: 10, minHeight: 70 }}>
       <div style={{ color: c.sub, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.02em" }}>{label}</div>
-      <div style={{ marginTop: 8, color: c.black, fontSize: 17, fontWeight: 800, lineHeight: 1.08 }}>{value}</div>
+      <div style={{ marginTop: bare ? 5 : 8, color: tone, fontSize: bare ? 14 : 17, fontWeight: 800, lineHeight: 1.08, whiteSpace: "nowrap" }}>{value}</div>
     </div>
   );
 }

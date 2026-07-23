@@ -22,6 +22,47 @@ type FeedbackRow = {
   created_at: string;
 };
 
+type AnalyticsEventRow = {
+  event_name: string;
+  page_path: string | null;
+  user_id: string | null;
+  created_at: string;
+  metadata: Record<string, unknown> | null;
+};
+
+type AnalyticsSessionRow = {
+  user_id: string | null;
+  utm_source: string | null;
+  utm_campaign: string | null;
+  referrer: string | null;
+  landing_page: string | null;
+  device: string | null;
+  country: string | null;
+  started_at: string;
+};
+
+type AnalyticsPageviewRow = {
+  page_path: string | null;
+  user_id: string | null;
+  created_at: string;
+};
+
+type AiGenerationRunRow = {
+  generation_type: string | null;
+  status: string | null;
+  duration_ms: number | null;
+  estimated_cost_gbp: number | null;
+  created_at: string;
+};
+
+type AdminErrorEventRow = {
+  route: string | null;
+  event_name: string | null;
+  error_type: string | null;
+  sanitized_message: string | null;
+  created_at: string;
+};
+
 async function getAuthUser(req: NextRequest) {
   const authHeader = req.headers.get("authorization") || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
@@ -63,6 +104,140 @@ async function listAllUsers() {
   return users;
 }
 
+function daysAgo(days: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString();
+}
+
+function countBy<T>(rows: T[], getKey: (row: T) => string | null | undefined, fallback = "Unknown") {
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    const key = (getKey(row) || fallback).trim() || fallback;
+    map.set(key, (map.get(key) || 0) + 1);
+  }
+  return Array.from(map.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 8);
+}
+
+function uniqueCount(values: Array<string | null | undefined>) {
+  return new Set(values.filter(Boolean)).size;
+}
+
+function sourceLabel(row: AnalyticsSessionRow) {
+  if (row.utm_source) return row.utm_source;
+  const ref = row.referrer || "";
+  if (!ref) return "Direct";
+  try {
+    const host = new URL(ref).hostname.replace(/^www\./, "");
+    if (host.includes("linkedin")) return "LinkedIn";
+    if (host.includes("google")) return "Google";
+    if (host.includes("bing")) return "Bing";
+    return host;
+  } catch {
+    return "Referral";
+  }
+}
+
+async function loadAnalytics(admin: any) {
+  const since30 = daysAgo(30);
+  const since7 = daysAgo(7);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [eventsRes, sessionsRes, pageviewsRes, visitorsTodayRes, visitorsMonthRes, aiRunsRes, errorsRes] = await Promise.all([
+    (admin as any).from("analytics_events").select("event_name,page_path,user_id,created_at,metadata").gte("created_at", since30).order("created_at", { ascending: false }).limit(1500),
+    (admin as any).from("analytics_sessions").select("user_id,utm_source,utm_campaign,referrer,landing_page,device,country,started_at").gte("started_at", since30).order("started_at", { ascending: false }).limit(1500),
+    (admin as any).from("analytics_pageviews").select("page_path,user_id,created_at").gte("created_at", since30).order("created_at", { ascending: false }).limit(1500),
+    (admin as any).from("analytics_visitors").select("id", { count: "exact", head: true }).gte("last_seen_at", `${today}T00:00:00.000Z`),
+    (admin as any).from("analytics_visitors").select("id", { count: "exact", head: true }).gte("last_seen_at", since30),
+    (admin as any).from("ai_generation_runs").select("generation_type,status,duration_ms,estimated_cost_gbp,created_at").gte("created_at", since30).order("created_at", { ascending: false }).limit(500),
+    (admin as any).from("admin_error_events").select("route,event_name,error_type,sanitized_message,created_at").gte("created_at", since7).order("created_at", { ascending: false }).limit(50),
+  ]);
+
+  const results = [eventsRes, sessionsRes, pageviewsRes, visitorsTodayRes, visitorsMonthRes, aiRunsRes, errorsRes];
+  const missing = results.find((res) => res.error && /relation .* does not exist/i.test(res.error.message || ""));
+  if (missing) {
+    return { available: false, reason: "Analytics SQL has not been run yet." };
+  }
+  const failed = results.find((res) => res.error);
+  if (failed) throw failed.error;
+
+  const events = (eventsRes.data ?? []) as AnalyticsEventRow[];
+  const sessions = (sessionsRes.data ?? []) as AnalyticsSessionRow[];
+  const pageviews = (pageviewsRes.data ?? []) as AnalyticsPageviewRow[];
+  const aiRuns = (aiRunsRes.data ?? []) as AiGenerationRunRow[];
+  const errors = (errorsRes.data ?? []) as AdminErrorEventRow[];
+
+  const eventCounts = countBy(events, (row) => row.event_name);
+  const eventCount = (name: string) => events.filter((row) => row.event_name === name).length;
+  const usersWithPack = uniqueCount(events.filter((row) => row.event_name === "pack_generation_completed").map((row) => row.user_id));
+  const usersWithCe = uniqueCount(events.filter((row) => row.event_name === "ce_created").map((row) => row.user_id));
+  const usersWithProject = uniqueCount(events.filter((row) => row.event_name === "project_created").map((row) => row.user_id));
+  const successfulRuns = aiRuns.filter((row) => row.status === "success").length;
+  const failedRuns = aiRuns.filter((row) => row.status === "failed").length;
+  const durationRows = aiRuns.filter((row) => typeof row.duration_ms === "number");
+  const avgDurationMs = durationRows.length
+    ? Math.round(durationRows.reduce((sum, row) => sum + Number(row.duration_ms || 0), 0) / durationRows.length)
+    : 0;
+  const estimatedCostGbp = aiRuns.reduce((sum, row) => sum + Number(row.estimated_cost_gbp || 0), 0);
+
+  return {
+    available: true,
+    headline: {
+      visitorsToday: visitorsTodayRes.count || 0,
+      visitors30Days: visitorsMonthRes.count || 0,
+      sessions30Days: sessions.length,
+      pageviews30Days: pageviews.length,
+      demoClicks: eventCount("demo_clicked"),
+      pricingViews: pageviews.filter((row) => row.page_path?.startsWith("/pricing")).length,
+      trialStarts: eventCount("trial_started"),
+      signupCompleted: eventCount("signup_completed"),
+      activatedTrials: usersWithPack,
+    },
+    funnel: [
+      { label: "Visitors", value: visitorsMonthRes.count || 0 },
+      { label: "Demo clicks", value: eventCount("demo_clicked") },
+      { label: "Pricing views", value: pageviews.filter((row) => row.page_path?.startsWith("/pricing")).length },
+      { label: "Trial starts", value: eventCount("trial_started") },
+      { label: "Projects created", value: eventCount("project_created") },
+      { label: "CEs created", value: eventCount("ce_created") },
+      { label: "Packs generated", value: eventCount("pack_generation_completed") },
+    ],
+    acquisition: {
+      sources: countBy(sessions, sourceLabel),
+      campaigns: countBy(sessions, (row) => row.utm_campaign, "No campaign"),
+      devices: countBy(sessions, (row) => row.device),
+      countries: countBy(sessions, (row) => row.country, "Unknown country"),
+    },
+    pages: countBy(pageviews, (row) => row.page_path),
+    featureAdoption: {
+      projectCreatedUsers: usersWithProject,
+      ceCreatedUsers: usersWithCe,
+      ewnCreated: eventCount("ewn_created"),
+      evidenceUploaded: eventCount("evidence_uploaded"),
+      packGenerated: eventCount("pack_generation_completed"),
+      packDownloaded: eventCount("pack_downloaded"),
+      rebuttalGenerated: eventCount("rebuttal_generated"),
+      paymentStatusUpdated: eventCount("payment_status_updated"),
+    },
+    ai: {
+      totalRuns: aiRuns.length,
+      successfulRuns,
+      failedRuns,
+      avgDurationMs,
+      estimatedCostGbp,
+      byType: countBy(aiRuns, (row) => row.generation_type),
+    },
+    reliability: {
+      errors,
+      byType: countBy(errors, (row) => row.error_type || row.event_name || row.route),
+    },
+    eventCounts,
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
     const user = await getAuthUser(req);
@@ -96,6 +271,11 @@ export async function GET(req: NextRequest) {
     const credits = (creditsRes.data ?? []) as AdminCreditRow[];
     const billing = (billingRes.data ?? []) as AdminBillingRow[];
     const feedback = (feedbackRes.data ?? []) as FeedbackRow[];
+
+    const analytics = await loadAnalytics(admin).catch((error: any) => ({
+      available: false,
+      reason: error?.message || "Analytics unavailable",
+    }));
 
     const rows = users.map((u: any) => {
       const userId = u.id;
@@ -145,7 +325,7 @@ export async function GET(req: NextRequest) {
       revenue: rows.reduce((sum, row) => sum + row.revenue, 0),
     };
 
-    return NextResponse.json({ rows, totals, feedback });
+    return NextResponse.json({ rows, totals, feedback, analytics });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Failed to load admin overview" }, { status: 500 });
   }

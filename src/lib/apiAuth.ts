@@ -15,6 +15,6 @@ export async function getAuthUserFromRequest(req: NextRequest) {
   });
 
   const { data, error } = await supabase.auth.getUser(token);
-  if (error) throw error;
+  if (error) return null;
   return data.user || null;
 }

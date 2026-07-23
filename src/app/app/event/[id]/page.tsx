@@ -6,6 +6,7 @@ import { buildEventStepPath, normalizeRouteParam } from "@/lib/routeParams";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getOwnedEventOrThrow, getRequiredUser, isAuthErrorMessage, isOwnershipErrorMessage } from "@/lib/security";
 import CEProgress from "@/components/CEProgress";
+import CEReadinessRail from "@/components/CEReadinessRail";
 import { calculateTimeRisk, formatDateShort, getDefaultNoticePeriodDays, toDateInputValue } from "@/lib/commercialControl";
 
 type Basis = {
@@ -65,6 +66,9 @@ const c = {
   sub: "var(--text-muted)",
   black: "var(--accent)",
   blackContrast: "var(--accent-contrast)",
+  purple: "var(--purple, #6d4aff)",
+  purpleSoft: "var(--purple-soft, #f3efff)",
+  purpleBorder: "var(--purple-border, #ddd4ff)",
   redBg: "var(--red-bg)",
   redBorder: "var(--red-border)",
   redText: "var(--red-text)",
@@ -220,46 +224,6 @@ function Card({
 
       <div style={{ marginTop: 16 }}>{children}</div>
     </section>
-  );
-}
-
-function SidebarCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        border: `1px solid ${c.border}`,
-        borderRadius: 18,
-        padding: "18px 20px",
-        background: c.card,
-        boxShadow: "0 1px 2px rgba(15,23,42,0.03)",
-      }}
-    >
-      <div
-        style={{
-          fontSize: 14,
-          fontWeight: 700,
-          color: c.black,
-          marginBottom: 12,
-        }}
-      >
-        {title}
-      </div>
-      <div
-        style={{
-          fontSize: 13,
-          lineHeight: 1.55,
-          color: c.sub,
-        }}
-      >
-        {children}
-      </div>
-    </div>
   );
 }
 
@@ -425,14 +389,17 @@ function StepTabs({
           <button
             key={step.key}
             type="button"
+            aria-current={active ? "step" : undefined}
+            data-selected={active ? "true" : "false"}
             onClick={() => onStepChange(step.key)}
             style={{
-              padding: "8px 10px",
+              padding: "8px 14px",
               borderRadius: 999,
-              border: `1px solid ${c.border}`,
-              background: active ? c.black : c.input,
-              color: active ? c.blackContrast : c.black,
-              fontWeight: 600,
+              border: `1px solid ${active ? c.purpleBorder : c.border}`,
+              background: active ? c.purpleSoft : c.input,
+              color: active ? c.purple : c.black,
+              boxShadow: active ? "0 0 0 3px rgba(109, 74, 255, 0.08)" : "none",
+              fontWeight: active ? 800 : 700,
               fontSize: 13,
               cursor: "pointer",
             }}
@@ -442,143 +409,6 @@ function StepTabs({
         );
       })}
     </div>
-  );
-}
-
-function GuidanceCard({
-  progress,
-  statusLabel,
-  lastSavedAt,
-  delayDays,
-}: {
-  progress: number;
-  statusLabel: string;
-  lastSavedAt: number | null;
-  delayDays: number;
-}) {
-  return (
-    <SidebarCard title="Guidance">
-      <div style={{ display: "grid", gap: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <span>Basis progress</span>
-          <strong style={{ color: c.black }}>{progress}%</strong>
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <span>Status</span>
-          <strong style={{ color: c.black }}>{statusLabel}</strong>
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <span>Delay days</span>
-          <strong style={{ color: c.black }}>{delayDays}</strong>
-        </div>
-
-        <div style={{ height: 1, background: c.border, margin: "2px 0" }} />
-
-        {lastSavedAt ? (
-          <div>Last saved at {new Date(lastSavedAt).toLocaleTimeString()}</div>
-        ) : (
-          <div>Changes save automatically shortly after you stop typing.</div>
-        )}
-
-        <div>
-          Keep this page factual and specific. Dates, locations, restrictions and changed assumptions
-          make the later CE narrative much stronger.
-        </div>
-      </div>
-    </SidebarCard>
-  );
-}
-
-function NextStepCard({
-  onSave,
-  onContinue,
-  canContinue,
-}: {
-  onSave: () => Promise<void>;
-  onContinue: () => Promise<void>;
-  canContinue: boolean;
-}) {
-  return (
-    <SidebarCard title="Next step">
-      <div style={{ display: "grid", gap: 10 }}>
-        <div>
-          Once the basis is clear, move to evidence and upload instructions, diaries, photos, programme
-          extracts and cost support.
-        </div>
-
-        <button
-          type="button"
-          onClick={() => {
-            void onSave();
-          }}
-          style={{
-            width: "100%",
-            padding: "11px 12px",
-            borderRadius: 12,
-            border: `1px solid ${c.border}`,
-            background: c.input,
-            color: c.black,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          Save now
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            void onContinue();
-          }}
-          style={{
-            width: "100%",
-            padding: "12px 14px",
-            borderRadius: 12,
-            border: `1px solid ${c.black}`,
-            background: c.black,
-            color: c.blackContrast,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          Continue to Evidence
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            window.location.href = "/app";
-          }}
-          style={{
-            width: "100%",
-            padding: "11px 12px",
-            borderRadius: 12,
-            border: `1px solid ${c.border}`,
-            background: c.lightGrey,
-            color: c.black,
-            fontWeight: 500,
-            cursor: "pointer",
-          }}
-        >
-          Back to dashboard
-        </button>
-
-        <div
-          style={{
-            marginTop: 2,
-            fontSize: 12,
-            fontWeight: 600,
-            color: canContinue ? c.greenText : c.amberText,
-          }}
-        >
-          {canContinue
-            ? "Basis details look complete enough to move on."
-            : "You can continue now, but filling the remaining gaps will strengthen the CE narrative."}
-        </div>
-      </div>
-    </SidebarCard>
   );
 }
 
@@ -610,6 +440,12 @@ export default function EventBasisPage() {
 
   const progress = useMemo(() => calcProgress(basis, delayDays), [basis, delayDays]);
 
+  useEffect(() => {
+    if (eventId && !isUuid(eventId)) {
+      router.replace("/app/new");
+    }
+  }, [eventId, router]);
+
   const timeRisk = useMemo(
     () =>
       calculateTimeRisk({
@@ -634,34 +470,6 @@ export default function EventBasisPage() {
     if (!loaded) return false;
     return currentSnapshot !== lastSavedSnapshotRef.current;
   }, [currentSnapshot, loaded, savedVersion]);
-
-  const qualityHints = useMemo(() => {
-    const hints: string[] = [];
-
-    if (!basis.happened_summary.trim()) {
-      hints.push("Add a clear what happened summary with dates and location.");
-    }
-    if (!basis.cause_type) {
-      hints.push("Select a cause type.");
-    }
-    if (!basis.cause_summary.trim()) {
-      hints.push("Explain what caused the event.");
-    }
-    if (!basis.difference_from_plan.trim()) {
-      hints.push("State what differed from the accepted plan or assumption.");
-    }
-    if (basis.mechanism_tags.length === 0) {
-      hints.push("Select at least one execution mechanism.");
-    }
-    if (basis.time_impact_toggle === "yes" && delayDays <= 0) {
-      hints.push("Enter the programme impact in days.");
-    }
-    if (!basis.mitigation_summary.trim()) {
-      hints.push("Add mitigation or explain why mitigation was limited.");
-    }
-
-    return hints;
-  }, [basis, delayDays]);
 
   const badgeStyle = useMemo(() => {
     if (status === "error") {
@@ -956,27 +764,8 @@ export default function EventBasisPage() {
     }
   }
 
-  async function continueToEvidence() {
-    await saveNow();
-    router.push(buildEventStepPath(eventId, "evidence"));
-  }
-
   if (!eventId || !isUuid(eventId)) {
-    return (
-      <div
-        style={{
-          background: c.card,
-          border: `1px solid ${c.border}`,
-          borderRadius: 22,
-          padding: 20,
-        }}
-      >
-        <div style={{ fontWeight: 700, color: c.black }}>Loading event…</div>
-        <div style={{ marginTop: 8, color: c.sub, fontSize: 13 }}>
-          If this stays here, refresh the page.
-        </div>
-      </div>
-    );
+    return null;
   }
 
   if (!loaded) {
@@ -995,16 +784,14 @@ export default function EventBasisPage() {
     );
   }
 
-  const basisReady = qualityHints.length === 0;
-
   return (
     <div style={{ background: c.bg, minHeight: "100vh" }}>
-      <div style={{ padding: "22px 18px", maxWidth: 1280, margin: "0 auto" }}>
+      <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 380px",
-            gap: 20,
+            gridTemplateColumns: "minmax(0, 1fr) 340px",
+            gap: 24,
             alignItems: "start",
           }}
         >
@@ -1086,6 +873,10 @@ export default function EventBasisPage() {
                 ) : (
                   <span style={{ fontSize: 12, color: c.sub }}>Autosave on</span>
                 )}
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <CEProgress eventId={eventId} currentStep="details" />
               </div>
             </div>
 
@@ -1255,11 +1046,12 @@ export default function EventBasisPage() {
                         style={{
                           padding: "10px 12px",
                           borderRadius: 999,
-                          border: `1px solid ${c.border}`,
-                          background: selected ? c.black : c.input,
-                          color: selected ? c.blackContrast : c.black,
+                          border: `1px solid ${selected ? c.purpleBorder : c.border}`,
+                          background: selected ? c.purpleSoft : c.input,
+                          color: selected ? c.purple : c.black,
+                          boxShadow: selected ? "0 0 0 3px rgba(109, 74, 255, 0.08)" : "none",
                           cursor: "pointer",
-                          fontWeight: 600,
+                          fontWeight: selected ? 800 : 700,
                           fontSize: 13,
                         }}
                       >
@@ -1338,55 +1130,24 @@ export default function EventBasisPage() {
               gap: 18,
             }}
           >
-            <div
-              style={{
-                border: `1px solid ${c.border}`,
-                borderRadius: 18,
-                padding: "16px 18px",
-                background: c.card,
-                boxShadow: "0 1px 2px rgba(15,23,42,0.03)",
-              }}
-            >
-              <CEProgress eventId={eventId} currentStep="details" />
-            </div>
-
-            <GuidanceCard
-              progress={progress}
-              statusLabel={badgeStyle.label}
-              lastSavedAt={lastSavedAt}
-              delayDays={delayDays}
+            <CEReadinessRail
+              readiness={progress}
+              readinessLabel={progress >= 85 ? "Ready to move" : progress > 0 ? "In progress" : "Just started"}
+              rows={[
+                { label: "Narrative", value: `${progress}%` },
+                { label: "Dates", value: eventTiming.event_date ? "Set" : "Missing" },
+                { label: "Notice risk", value: timeRisk.label },
+                { label: "Evidence", value: "Next step" },
+                { label: "Resources", value: "Next step" },
+              ]}
+              coach="Keep this page factual and specific. Dates, locations, restrictions and changed assumptions make the later CE narrative much stronger."
+              nextCopy="Once the basis is clear, move to evidence and upload instructions, diaries, photos, programme extracts and cost support."
+              primaryHref={buildEventStepPath(eventId, "evidence")}
+              primaryLabel="Continue to Evidence"
+              secondaryHref="/app"
+              secondaryLabel="Back to dashboard"
             />
 
-            <SidebarCard title="Quality checks">
-              {qualityHints.length === 0 ? (
-                <div
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 600,
-                    color: c.greenText,
-                  }}
-                >
-                  Basis details look solid enough to move on.
-                </div>
-              ) : (
-                <ul
-                  style={{
-                    margin: 0,
-                    paddingLeft: 0,
-                    listStyle: "none",
-                    color: c.sub,
-                    fontSize: 13,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {qualityHints.map((hint) => (
-                    <li key={hint}>{hint}</li>
-                  ))}
-                </ul>
-              )}
-            </SidebarCard>
-
-            <NextStepCard onSave={saveNow} onContinue={continueToEvidence} canContinue={basisReady} />
           </div>
         </div>
       </div>

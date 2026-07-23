@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
 import { COMPANY_PROFILE_SELECT, cleanCompanyProfile, type CompanyProfile } from "@/lib/companyProfile";
+import { AppPageHeader, AppSideCard } from "@/components/appUi";
 
 const c = {
   card: "var(--surface)",
@@ -17,6 +18,11 @@ const c = {
   redText: "var(--red-text)",
 };
 
+const COMPANY_PROFILE_BASE_SELECT = COMPANY_PROFILE_SELECT
+  .split(",")
+  .filter((column) => column.trim() !== "trade_profile")
+  .join(",");
+
 export default function CompanyProfilePage() {
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(() => cleanCompanyProfile(null));
   const [saving, setSaving] = useState(false);
@@ -28,11 +34,19 @@ export default function CompanyProfilePage() {
       const supabase = supabaseBrowser();
       try {
         const user = await getRequiredUser(supabase);
-        const { data, error } = await (supabase as any).from("company_profiles")
+        let profileRes = await (supabase as any).from("company_profiles")
           .select(COMPANY_PROFILE_SELECT)
           .eq("user_id", user.id)
           .maybeSingle();
 
+        if (profileRes.error && /trade_profile|schema cache|column|does not exist/i.test(String(profileRes.error.message || ""))) {
+          profileRes = await (supabase as any).from("company_profiles")
+            .select(COMPANY_PROFILE_BASE_SELECT)
+            .eq("user_id", user.id)
+            .maybeSingle();
+        }
+
+        const { data, error } = profileRes;
         if (error) throw error;
         setCompanyProfile(cleanCompanyProfile(data || null));
         setLoaded(true);
@@ -69,9 +83,15 @@ export default function CompanyProfilePage() {
         phone: nextProfile.phone || "",
         vat_number: nextProfile.vat_number || "",
         company_registration_number: nextProfile.company_registration_number || "",
+        trade_profile: "general",
         updated_at: new Date().toISOString(),
       };
-      const { error } = await (supabase as any).from("company_profiles").upsert(payload, { onConflict: "user_id" });
+      let saveRes = await (supabase as any).from("company_profiles").upsert(payload, { onConflict: "user_id" });
+      if (saveRes.error && /trade_profile|schema cache|column|does not exist/i.test(String(saveRes.error.message || ""))) {
+        const { trade_profile: _tradeProfile, ...fallbackPayload } = payload;
+        saveRes = await (supabase as any).from("company_profiles").upsert(fallbackPayload, { onConflict: "user_id" });
+      }
+      const { error } = saveRes;
       if (error) throw error;
       setCompanyProfile(cleanCompanyProfile(payload));
       setMessage("Company profile saved.");
@@ -141,7 +161,13 @@ export default function CompanyProfilePage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: 18, maxWidth: 1120 }}>
+    <div style={{ display: "grid", gap: 16 }}>
+      <AppPageHeader
+        title="Company Profile"
+        description="Keep your organisation details up to date. This information appears consistently across submission packs, reports and communications."
+      />
+      <div className="app-profile-layout" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 280px", gap: 16, alignItems: "start" }}>
+      <div style={{ display: "grid", gap: 16 }}>
       <section
         style={{
           background: c.card,
@@ -153,9 +179,9 @@ export default function CompanyProfilePage() {
           boxShadow: "0 1px 2px rgba(15,23,42,0.03)",
         }}
       >
-        <div style={{ fontSize: 24, fontWeight: 700, color: c.text, letterSpacing: 0 }}>Company Profile</div>
+        <div style={{ fontSize: 18, fontWeight: 750, color: c.text, letterSpacing: 0 }}>Submitting party</div>
         <div style={{ fontSize: 13, lineHeight: 1.55, color: c.sub, maxWidth: 760 }}>
-          This is the source of truth for your submitting party details. AI drafts, Excel outputs and future PDF/Word packs use this instead of inferred or hardcoded company names.
+          This is the source of truth for the company details used across your commercial outputs.
         </div>
       </section>
 
@@ -209,7 +235,7 @@ export default function CompanyProfilePage() {
           ].map(([label, key, placeholder]) => (
             <label key={key} style={{ display: "grid", gap: 6, fontSize: 13, fontWeight: 700, color: c.text }}>
               {label}
-              <input
+              <input className="app-control"
                 value={String((companyProfile as any)[key] || "")}
                 placeholder={String(placeholder)}
                 onChange={(e) => updateField(key as keyof CompanyProfile, e.target.value as any)}
@@ -220,7 +246,7 @@ export default function CompanyProfilePage() {
 
           <label style={{ display: "grid", gap: 6, fontSize: 13, fontWeight: 700, color: c.text, gridColumn: "1 / -1" }}>
             Company address
-            <textarea
+            <textarea className="app-control"
               value={companyProfile.address || ""}
               placeholder="Registered / correspondence address"
               onChange={(e) => updateField("address", e.target.value)}
@@ -300,6 +326,24 @@ export default function CompanyProfilePage() {
 
         {message ? <div style={{ fontSize: 13, color: message.toLowerCase().includes("failed") ? c.redText : c.sub }}>{message}</div> : null}
       </section>
+      </div>
+      <aside style={{ display: "grid", gap: 14, position: "sticky", top: 92 }}>
+        <AppSideCard title="Why this matters" tone="purple" icon="◎">
+          Consistent company details make every CE, EWN and exported document look deliberate and credible.
+        </AppSideCard>
+        <AppSideCard title="Where it is used" tone="green" icon="✓">
+          <div style={{ display: "grid", gap: 9 }}>
+            <span>✓ CE and EWN reports</span>
+            <span>✓ Cover pages and headers</span>
+            <span>✓ Excel cost outputs</span>
+            <span>✓ Submission packs</span>
+          </div>
+        </AppSideCard>
+        <AppSideCard title="Updates" tone="blue" icon="i">
+          Save once here and newly generated outputs will use the revised details.
+        </AppSideCard>
+      </aside>
+      </div>
     </div>
   );
 }

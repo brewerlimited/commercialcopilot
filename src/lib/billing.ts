@@ -9,6 +9,8 @@ export type BillingStatus =
   | "incomplete"
   | "incomplete_expired";
 
+export type AccountAccessStatus = "pending_activation" | "trial_active" | "active" | "suspended";
+
 export type BillingSnapshot = {
   plan: BillingPlan;
   status: BillingStatus;
@@ -17,6 +19,7 @@ export type BillingSnapshot = {
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   currentPeriodEnd: string | null;
+  accountStatus: AccountAccessStatus;
 };
 
 export const DEFAULT_MONTHLY_CREDITS = Number(process.env.NEXT_PUBLIC_DEFAULT_MONTHLY_CREDITS || 15);
@@ -61,9 +64,40 @@ export function isSubscriptionActive(status?: string | null) {
   return status === "active" || status === "trialing";
 }
 
+export function normaliseAccountAccessStatus(status?: string | null): AccountAccessStatus {
+  switch (status) {
+    case "trial_active":
+    case "active":
+    case "suspended":
+      return status;
+    default:
+      return "pending_activation";
+  }
+}
+
+export function humanAccountAccessLabel(status?: string | null) {
+  switch (normaliseAccountAccessStatus(status)) {
+    case "trial_active":
+      return "Trial active";
+    case "active":
+      return "Active";
+    case "suspended":
+      return "Suspended";
+    default:
+      return "Pending activation";
+  }
+}
+
+export function isAccountApproved(status?: string | null) {
+  const accountStatus = normaliseAccountAccessStatus(status);
+  return accountStatus === "trial_active" || accountStatus === "active";
+}
+
 export function canGenerateWithBilling(snapshot: BillingSnapshot | null | undefined) {
   if (!snapshot) return false;
   if (snapshot.isAdminUnlimited) return true;
+  if (snapshot.accountStatus === "suspended") return false;
+  if (isAccountApproved(snapshot.accountStatus) && snapshot.creditsRemaining > 0) return true;
   if (!isSubscriptionActive(snapshot.status)) return false;
   return snapshot.creditsRemaining > 0;
 }
@@ -82,5 +116,6 @@ export function getBillingSnapshot(profile: any, creditRow?: any): BillingSnapsh
     stripeCustomerId: profile?.stripe_customer_id || null,
     stripeSubscriptionId: profile?.stripe_subscription_id || null,
     currentPeriodEnd: profile?.current_period_end || null,
+    accountStatus: normaliseAccountAccessStatus(profile?.account_status),
   };
 }

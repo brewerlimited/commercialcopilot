@@ -6,6 +6,7 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { getContractLabel } from "@/lib/contracts";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
 import { COMMON_IMPORT_LIBRARY, getResourceLibrary } from "@/lib/resourceLibrary";
+import { AppPageHeader, MetricCard } from "@/components/appUi";
 
 type Category = "labour" | "plant" | "materials";
 type SourceType = "custom" | "ceca";
@@ -65,6 +66,9 @@ const c = {
   sub: "var(--text-muted)",
   black: "var(--accent)",
   blackContrast: "var(--accent-contrast)",
+  purple: "var(--purple, #6d4aff)",
+  purpleSoft: "var(--purple-soft, #f3efff)",
+  purpleBorder: "var(--purple-border, #ddd4ff)",
   soft: "var(--surface-soft)",
   activeBg: "var(--active-bg)",
   redBg: "var(--red-bg)",
@@ -126,9 +130,9 @@ function Pill({
       style={{
         padding: "8px 12px",
         borderRadius: 999,
-        border: `1px solid ${active ? c.black : c.border}`,
-        background: active ? c.black : c.input,
-        color: active ? c.blackContrast : c.black,
+        border: `1px solid ${active ? c.purpleBorder : c.border}`,
+        background: active ? c.purpleSoft : c.input,
+        color: active ? c.purple : c.black,
         fontSize: 14,
         lineHeight: 1.2,
         fontWeight: 650,
@@ -608,25 +612,32 @@ export default function RateCardsPage() {
         .filter((row) => row.category === tab)
         .filter((row) => (row.project_name ?? "") === selectedProject.project_name && (row.main_contractor ?? "") === selectedProject.main_contractor)
         .map((row) => row.name.trim().toLowerCase());
-      const items = (COMMON_IMPORT_LIBRARY as Record<string, Array<{ name: string; unit: string }>>)[tab] || [];
+      const items = (COMMON_IMPORT_LIBRARY as Record<string, Array<{ name: string; unit: string; defaultRate?: number; notes?: string }>>)[tab] || [];
       const payload = items
         .filter((item) => !existing.includes(item.name.trim().toLowerCase()))
-        .map((item) => ({
-          user_id: user.id,
-          project_name: selectedProject.project_name,
-          main_contractor: selectedProject.main_contractor,
-          category: tab,
-          name: item.name,
-          unit: item.unit,
-          rate: 0,
-          notes: "Imported common starter item",
-          active: true,
-          source_type: "custom",
-          ceca_item_id: null,
-          ceca_rate: null,
-          adjustment_percent: null,
-          final_rate: 0,
-        }));
+        .map((item) => {
+          const defaultRate = Number(item.defaultRate ?? 0);
+          return {
+            user_id: user.id,
+            project_name: selectedProject.project_name,
+            main_contractor: selectedProject.main_contractor,
+            category: tab,
+            name: item.name,
+            unit: item.unit,
+            rate: defaultRate,
+            notes:
+              item.notes ??
+              (tab === "labour"
+                ? "Imported common labour market-rate starter. Edit for project, region, contract or actual cost basis."
+                : "Imported common starter item"),
+            active: true,
+            source_type: "custom",
+            ceca_item_id: null,
+            ceca_rate: null,
+            adjustment_percent: null,
+            final_rate: defaultRate,
+          };
+        });
 
       if (payload.length > 0) {
         const { error } = await (supabase as any).from("rate_cards").insert(payload);
@@ -777,7 +788,17 @@ export default function RateCardsPage() {
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
-      <Card title="Rate cards" hint="Set project-specific labour, plant and material rates once, then reuse them across CE / VO valuations with controlled deterministic pricing.">
+      <AppPageHeader
+        title="Project Rate Cards"
+        description="Manage project-specific labour, plant and material rates, then reuse them across CE / VO valuations with controlled deterministic pricing."
+      />
+      <div className="app-rate-metrics" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <MetricCard label="Labour rates" value={rows.filter((row) => row.category === "labour" && row.active).length} hint="Active" tone="purple" />
+        <MetricCard label="Plant rates" value={rows.filter((row) => row.category === "plant" && row.active).length} hint="Custom and CECA" tone="green" />
+        <MetricCard label="Material rates" value={rows.filter((row) => row.category === "materials" && row.active).length} hint="Active" tone="orange" />
+        <MetricCard label="Projects" value={projects.length} hint="With reusable rate cards" tone="blue" />
+      </div>
+      <Card title="Rate card library" hint="Choose a project and maintain the rate basis used in its compensation events and variations.">
         <div
           style={{
             display: "grid",

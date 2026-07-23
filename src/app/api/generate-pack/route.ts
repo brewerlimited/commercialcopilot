@@ -4,6 +4,8 @@ import { getAuthUserFromRequest } from "@/lib/apiAuth";
 import { checkAdminWithServiceRole } from "@/lib/adminAccess";
 import { buildGenerateDraftPayload, tryStoreDraftPayload } from "@/lib/generateDraftPayload";
 import { generateAiDraftFromPayload } from "@/lib/aiDraft";
+import { recordAdminErrorEvent, recordAiGenerationRun } from "@/lib/serverAnalytics";
+import { getProtectedGenerationAccess } from "@/lib/accessControl";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -11,10 +13,6 @@ export const maxDuration = 300;
 function clampNum(value: any, fallback = 0) {
   const n = typeof value === "number" ? value : parseFloat(String(value));
   return Number.isFinite(n) ? n : fallback;
-}
-
-function isActiveSubscription(status?: string | null) {
-  return status === "active" || status === "trialing";
 }
 
 function isUuid(value: unknown) {
@@ -25,14 +23,20 @@ function isUuid(value: unknown) {
 }
 
 export async function POST(req: NextRequest) {
+  const metricsStartedAt = Date.now();
+  let metricsAdmin: any = null;
+  let metricsUserId: string | null = null;
+  let metricsEventId: string | null = null;
   try {
     const user = await getAuthUserFromRequest(req);
     if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    metricsUserId = user.id;
 
     const body = await req.json().catch(() => ({}));
     const eventId = String(body?.eventId || body?.event_id || "").trim();
+    metricsEventId = eventId || null;
     const requestedForceGenerate = Boolean(body?.forceGenerateMode);
     const generationMode = "multistage";
     const pack = body?.pack || {};
@@ -42,6 +46,7 @@ export async function POST(req: NextRequest) {
     }
 
     const admin = supabaseAdmin() as any;
+    metricsAdmin = admin;
 
     const eventRes = await (admin as any).from("events")
       .select("id,user_id")
@@ -56,7 +61,7 @@ export async function POST(req: NextRequest) {
 
     const [profileRes, creditRes] = await Promise.all([
       (admin as any).from("profiles")
-        .select("id,subscription_status,is_admin_unlimited,credits_remaining")
+        .select("id,subscription_status,account_status,is_admin_unlimited,credits_remaining")
         .eq("id", user.id)
         .maybeSingle(),
       (admin as any).from("user_credits")
@@ -94,6 +99,18 @@ export async function POST(req: NextRequest) {
       (creditRes.data as any)?.credits_remaining ?? (profile as any)?.credits_remaining,
       0
     );
+    const generationAccess = getProtectedGenerationAccess(profile as any, creditsRemaining);
+
+    if (!forceGenerateMode && !generationAccess.allowed) {
+      return NextResponse.json(
+        {
+          error: generationAccess.message,
+          code: generationAccess.code,
+          accountStatus: generationAccess.accountStatus,
+        },
+        { status: 403 }
+      );
+    }
 
     // Idempotency guard: once a pack has been generated for this event,
     // normal Generate Pack calls must return the saved pack instead of creating
@@ -160,20 +177,6 @@ export async function POST(req: NextRequest) {
           packId: existingPack.id,
         });
       }
-    }
-
-    if (!forceGenerateMode && !isAdminUnlimited && !isActiveSubscription((profile as any).subscription_status)) {
-      return NextResponse.json(
-        { error: "Your subscription is not active. Open Billing to upgrade before generating a pack." },
-        { status: 403 }
-      );
-    }
-
-    if (!forceGenerateMode && !isAdminUnlimited && creditsRemaining <= 0) {
-      return NextResponse.json(
-        { error: "No credits remaining. Open Billing to upgrade or buy additional credits before generating a pack." },
-        { status: 403 }
-      );
     }
 
     const draftPayload = await buildGenerateDraftPayload({
@@ -245,6 +248,21 @@ export async function POST(req: NextRequest) {
     if (profileUpdateRes.error) throw profileUpdateRes.error;
     if (creditUpdateRes.error) throw creditUpdateRes.error;
 
+    await recordAiGenerationRun(admin, {
+      userId: user.id,
+      eventId,
+      packId: insertedPack?.id || null,
+      generationType: "pack",
+      generationMode,
+      status: "success",
+      startedAt: metricsStartedAt,
+      metadata: {
+        forceGenerated: forceGenerateMode,
+        creditCharged: true,
+        readinessScore: clampNum(pack.readiness_score, 0),
+      },
+    });
+
     return NextResponse.json({
       success: true,
       generated: true,
@@ -269,6 +287,25 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("Generate pack error:", error);
+    if (metricsAdmin) {
+      await recordAiGenerationRun(metricsAdmin, {
+        userId: metricsUserId,
+        eventId: metricsEventId,
+        generationType: "pack",
+        generationMode: "multistage",
+        status: "failed",
+        startedAt: metricsStartedAt,
+        errorType: error?.name || "generate_pack_error",
+        message: error?.message,
+      });
+      await recordAdminErrorEvent(metricsAdmin, {
+        userId: metricsUserId,
+        route: "/api/generate-pack",
+        eventName: "pack_generation_failed",
+        errorType: error?.name || "generate_pack_error",
+        message: error?.message,
+      });
+    }
     return NextResponse.json(
       { error: error?.message || "Failed to generate pack" },
       { status: 500 }

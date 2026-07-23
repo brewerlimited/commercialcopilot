@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { getAuthUserFromRequest } from "@/lib/apiAuth";
 import { generateAiEwnFromInput } from "@/lib/ewnDraft";
+import { getProtectedGenerationAccess } from "@/lib/accessControl";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
     }
 
     const profileRes = await (admin as any).from("profiles")
-      .select("id,is_admin_unlimited,ewn_credits_remaining,ewn_credits_limit")
+      .select("id,subscription_status,account_status,is_admin_unlimited,ewn_credits_remaining,ewn_credits_limit")
       .eq("id", user.id)
       .maybeSingle();
 
@@ -66,10 +67,21 @@ export async function POST(req: NextRequest) {
     const profile = (profileRes.data || {}) as Record<string, unknown>;
     const isAdminUnlimited = Boolean(profile.is_admin_unlimited);
     const currentCredits = clampNum(profile.ewn_credits_remaining, BASELINE_EWN_CREDITS);
+    const generationAccess = getProtectedGenerationAccess(
+      { ...profile, credits_remaining: currentCredits },
+      currentCredits
+    );
 
-    if (!isAdminUnlimited && currentCredits <= 0) {
+    if (!generationAccess.allowed) {
       return NextResponse.json(
-        { error: "Monthly EWN generation allowance reached. EWN records can still be updated manually." },
+        {
+          error:
+            generationAccess.code === "no_credits"
+              ? "Monthly EWN generation allowance reached. EWN records can still be updated manually."
+              : generationAccess.message,
+          code: generationAccess.code,
+          accountStatus: generationAccess.accountStatus,
+        },
         { status: 403 }
       );
     }

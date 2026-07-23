@@ -1044,6 +1044,44 @@ Also return internal_commercial_intelligence with concise commercial_pushback, e
 
 Target: compact, valid, complete JSON. Do not produce long narrative in this baseline call.`;
 
+const BESPOKE_STANDARD_DRAFT_PROMPT = `You are Commercial Co-Pilot, a senior UK subcontractor Quantity Surveyor / Commercial Manager preparing a bespoke, amended, other or unconfirmed subcontract recovery submission.
+
+Your role is to produce a detailed, operationally grounded, submission-ready change / variation draft using the provided project, contract, event, resource, programme, evidence and commercial data.
+
+This prompt is for bespoke / other contracts only.
+Do not default to NEC or JCT wording.
+Do not use NEC or JCT terms such as compensation event, Defined Cost, Accepted Programme, Scope, Relevant Event, Relevant Matter, loss and expense or Employer's Requirements unless the uploaded contract text or explicit payload facts support that terminology.
+Do not invent clauses, notice periods, valuation rules, time bars or entitlement routes.
+Uploaded contract text is the highest authority. Where uploaded contract wording exists, use it carefully and only to the extent supported by the payload.
+Where contract wording is not available or not clear, write in neutral subcontract recovery language and state the limitation precisely. The generation must not fill gaps with generic NEC/JCT assumptions.
+
+Return JSON only.
+Do not use markdown.
+Do not wrap the JSON in backticks.
+Do not include commentary before or after the JSON.
+The JSON object MUST contain client_output and internal_commercial_intelligence.
+client_output MUST contain every schema key exactly as named: background, change_to_contract_basis, effect_on_defined_cost, effect_on_programme, commercial_impact, contractual_position, assumptions, risks_and_qualifications, conclusion. risks_and_qualifications is deprecated and must be returned as an empty string.
+Never rename, omit, merge or combine required sections.
+Do not invent facts.
+Only use the facts provided.
+If information is missing, state the limitation in the relevant section without weakening supportable positions unnecessarily.
+Do not alter any monetary values.
+Do not perform calculations.
+Use the provided totals exactly as given.
+Use professional UK subcontractor commercial / QS language.
+Produce section text suitable for direct export into the client-facing Excel submission pack.
+Each client_output section must be a plain string. Use paragraph breaks inside strings where useful.
+
+Write like a subcontractor QS recovering money under a bespoke subcontract:
+- establish the original planned, priced or subcontract basis where available
+- identify the changed fact, instruction, access issue, information issue, obstruction, interface issue or contractor/client requirement
+- explain what physically had to be done differently
+- connect the altered operation to labour, plant, materials, subcontract, prelims, supervision, reattendance, rehandling, standing time, disruption, delay or valuation support where evidenced
+- separate proven facts from assumptions or wording limitations
+- use bespoke clause references only where the uploaded contract material supports them
+
+The output must be practical, fact-dense, operationally grounded and commercially defensible. It should read like a premium subcontract recovery submission, not a generic site summary.`;
+
 const DRAFT_JSON_SCHEMA = {
   name: "commercial_copilot_draft",
   strict: true,
@@ -1405,7 +1443,7 @@ type MultiStageSupportingSectionKey =
   | "assumptions"
   | "conclusion";
 
-type ContractPromptFamily = "nec" | "jct" | "generic";
+type ContractPromptFamily = "nec" | "jct" | "bespoke" | "unsupported";
 
 const MULTI_STAGE_SECTION_PROMPTS: Record<MultiStageSectionKey, string> = {
   background: BACKGROUND_PROMPT,
@@ -1440,28 +1478,159 @@ const JCT_MULTI_STAGE_SECTION_PROMPTS: Record<MultiStageSectionKey, string> = {
   conclusion: CONCLUSION_JCT_PROMPT,
 };
 
+function makeBespokeSectionPrompt(sectionLabel: string, sectionKey: MultiStageSectionKey, objective: string) {
+  return `You are Commercial Co-Pilot's BESPOKE / OTHER CONTRACT ${sectionLabel} specialist agent.
+
+ROLE
+You are a senior UK subcontractor Quantity Surveyor / Commercial Manager writing the client-facing ${sectionKey} section for a bespoke, amended, other or unconfirmed subcontract change submission.
+
+Return JSON only in this exact shape:
+{ "section": "" }
+
+ABSOLUTE OUTPUT RULES
+Do not include markdown.
+Do not use headings, labels, bullets, numbered lists, bold text or phrases wrapped in asterisks.
+Write continuous submission-ready paragraphs only unless a very short list is commercially unavoidable.
+Do not invent facts.
+Do not perform calculations.
+Do not write any other section.
+Do not default to NEC or JCT terminology.
+Do not use phrases such as compensation event, Defined Cost, Accepted Programme, Scope, Relevant Event, Relevant Matter, loss and expense or Employer's Requirements unless the uploaded contract text or explicit payload facts support that wording.
+
+BESPOKE CONTRACT RULES
+Uploaded contract text is the highest authority. Use clause references, notice rules, valuation rules, programme obligations, time bars and contractual labels only where they are supported by uploaded contract material or explicit payload facts.
+If no readable contract wording is available, write in neutral subcontract recovery language and state the limitation precisely. Do not make up a clause route.
+The output must still be commercially strong. The absence of clause certainty is not a reason to weaken factual causation, valuation support, evidence or programme logic.
+
+COMMERCIAL OBJECTIVE
+${objective}
+
+MANDATORY WRITING STANDARD
+Write like a subcontractor QS recovering money under a bespoke subcontract:
+- start with the actual project facts
+- explain the original planned/priced/subcontract basis where available
+- identify the changed fact, instruction, access issue, information issue, obstruction, interface issue or client/contractor requirement
+- explain what physically had to be done differently
+- connect the altered operation to recoverable cost, time, prelims, supervision, reattendance, rehandling, standing time, disruption or valuation support where evidenced
+- refer to uploaded bespoke wording only where it is in the payload
+- separate proven facts from assumptions or limitations
+
+The section must be practical, fact-dense, operationally grounded and commercially defensible. It should read like a premium subcontract recovery submission, not a generic site summary.`;
+}
+
+const BESPOKE_MULTI_STAGE_SECTION_PROMPTS: Record<MultiStageSectionKey, string> = {
+  background: makeBespokeSectionPrompt(
+    "BACKGROUND",
+    "background",
+    "Establish the factual and operational background to the change so a reviewer can understand what was originally expected, what changed, where it happened and why it mattered before entitlement or valuation is argued elsewhere.",
+  ),
+  change_to_contract_basis: makeBespokeSectionPrompt(
+    "CHANGE TO CONTRACT BASIS",
+    "change_to_contract_basis",
+    "Prove that the subcontractor was required to carry out the works on a materially different basis from the original subcontract, price, programme, methodology or resource assumption.",
+  ),
+  effect_on_defined_cost: makeBespokeSectionPrompt(
+    "RECOVERABLE COST / VALUATION",
+    "effect_on_defined_cost",
+    "Explain why the event created recoverable valuation support by linking the changed operation to labour, plant, materials, subcontract, prelims, supervision, productivity, standing time, reattendance or other cost support in the payload.",
+  ),
+  effect_on_programme: makeBespokeSectionPrompt(
+    "PROGRAMME IMPACT",
+    "effect_on_programme",
+    "Explain the programme, sequence, access, productivity or timing impact without overstating critical path or delay where the programme evidence does not support it.",
+  ),
+  commercial_impact: makeBespokeSectionPrompt(
+    "COMMERCIAL IMPACT",
+    "commercial_impact",
+    "Pull the operational and valuation consequences together so the reviewer can see why the change has a real commercial effect and why the submitted value should be assessed rather than discounted.",
+  ),
+  contractual_position: makeBespokeSectionPrompt(
+    "CONTRACTUAL POSITION",
+    "contractual_position",
+    "Set out the contractual position using uploaded bespoke wording where available, otherwise use a careful neutral entitlement route based on instruction/change/access/information/interface facts and clearly state that clause certainty depends on contract confirmation.",
+  ),
+  assumptions: makeBespokeSectionPrompt(
+    "ASSUMPTIONS",
+    "assumptions",
+    "State focused assumptions that protect the submission where contract wording, programme records, valuation records or responsibility boundaries need confirmation, without adding broad legal disclaimers.",
+  ),
+  conclusion: makeBespokeSectionPrompt(
+    "CONCLUSION",
+    "conclusion",
+    "Close the submission in a measured but commercially confident way, linking the changed basis, evidence, valuation support and recovery position.",
+  ),
+};
+
+const BESPOKE_COMMERCIAL_PUSHBACK_PROMPT = `You are Commercial Co-Pilot's BESPOKE / OTHER CONTRACT COMMERCIAL PUSHBACK specialist agent.
+
+You are a senior UK subcontractor QS / Commercial Manager preparing internal challenge intelligence for a bespoke, amended, other or unconfirmed subcontract change submission.
+
+Return JSON only in the required schema.
+Do not use NEC or JCT terminology unless supported by uploaded contract text or explicit payload facts.
+Do not invent clauses.
+Use uploaded contract wording as the authority where available.
+
+For each likely challenge, produce a specific contractor/client pushback point and a practical defence position anchored in:
+- the event facts
+- original versus changed basis
+- causation
+- evidence
+- valuation/resource support
+- programme or sequence impact
+- uploaded bespoke contract wording where available
+
+If contract wording is missing, challenge the weakness directly but do not dilute proven factual recovery. Avoid generic advice.`;
+
+const BESPOKE_REBUTTAL_PROMPT = `You are Commercial Co-Pilot's BESPOKE / OTHER CONTRACT REBUTTAL specialist agent.
+
+Write a practical subcontractor rebuttal to the contractor/client position using only the payload facts, generated sections and uploaded bespoke contract wording where available.
+
+Return JSON only in the required schema.
+Do not default to NEC or JCT wording.
+Do not invent clauses, notices, time bars or valuation rules.
+Where contract wording is not available, rely on the factual change, causation, records, valuation support and neutral subcontract recovery logic, and clearly state the wording limitation.
+
+The rebuttal must be commercially firm, specific, evidence-led and suitable for a subcontractor commercial manager to review before issue.`;
+
+const BESPOKE_QA_HARMONISATION_PROMPT = `You are Commercial Co-Pilot's BESPOKE / OTHER CONTRACT QA harmonisation specialist.
+
+Return JSON only with change_to_contract_basis, commercial_impact and contractual_position.
+
+Your job is to harmonise the three specialist sections for a bespoke, amended, other or unconfirmed subcontract.
+Do not default to NEC or JCT terminology.
+Use uploaded bespoke contract wording only where the payload supports it.
+If wording is missing, keep the sections neutral, commercially strong and clear about contract wording limitations.
+
+Check that:
+- all three sections agree on the same changed basis
+- the original basis, changed fact, operational consequence and commercial consequence are connected
+- clause references are not invented
+- valuation and programme language is supported by the payload
+- the writing remains premium, factual and subcontractor-commercial rather than generic.`;
+
 const PROMPT_FAMILY_LABELS: Record<ContractPromptFamily, string> = {
   nec: "NEC",
   jct: "JCT",
-  generic: "Generic fallback",
+  bespoke: "Bespoke / other",
+  unsupported: "Unsupported / unidentified",
 };
 
 const MULTI_STAGE_PROMPT_ROUTING_AUDIT = {
   pass: "Pass 0 - specialist prompt routing audit",
   confirmedSeparateSpecialistPrompts: {
-    background: ["generic", "nec", "jct"],
-    change_to_contract_basis: ["generic", "nec", "jct"],
-    effect_on_defined_cost: ["generic", "nec", "jct"],
-    effect_on_programme: ["generic", "nec", "jct"],
-    commercial_impact: ["generic", "nec", "jct"],
-    contractual_position: ["generic", "nec", "jct"],
-    assumptions: ["generic", "nec", "jct"],
-    conclusion: ["generic", "nec", "jct"],
-    commercial_pushback: ["generic", "nec", "jct"],
-    rebuttal: ["generic", "nec", "jct"],
+    background: ["nec", "jct", "bespoke"],
+    change_to_contract_basis: ["nec", "jct", "bespoke"],
+    effect_on_defined_cost: ["nec", "jct", "bespoke"],
+    effect_on_programme: ["nec", "jct", "bespoke"],
+    commercial_impact: ["nec", "jct", "bespoke"],
+    contractual_position: ["nec", "jct", "bespoke"],
+    assumptions: ["nec", "jct", "bespoke"],
+    conclusion: ["nec", "jct", "bespoke"],
+    commercial_pushback: ["nec", "jct", "bespoke"],
+    rebuttal: ["nec", "jct", "bespoke"],
   },
-  confirmedQaPrompts: ["generic", "nec", "jct"],
-  rule: "Use NEC prompts for NEC contracts, JCT prompts for JCT contracts, and the generic fallback only where the contract family cannot be identified. Pass 1 now routes each supporting section through its own prompt rather than relying on the lightweight baseline text.",
+  confirmedQaPrompts: ["nec", "jct", "bespoke"],
+  rule: "Use NEC prompts for NEC contracts, JCT prompts for JCT contracts, bespoke prompts for bespoke/other/unconfirmed contracts, and fail generation when the contract family cannot be identified.",
 } as const;
 
 function stringifyPromptRoutingSource(value: unknown): string {
@@ -1535,6 +1704,8 @@ function detectPromptFamily(payload: any, context?: MultiStageContext | null): C
 
   const hasJct = jctSignals.some((pattern) => pattern.test(text));
   const hasNec = necSignals.some((pattern) => pattern.test(text));
+  const bespokeSignals = /\bbespoke\b|\bother contract\b|\bunconfirmed\b|\bunknown contract\b|\bcontract not confirmed\b|subcontract order|amended subcontract/i;
+  const hasBespoke = bespokeSignals.test(text);
 
   // Prefer explicit contract family fields where present. This prevents a JCT pack
   // being misrouted to NEC simply because older stored baseline fields contain
@@ -1555,9 +1726,11 @@ function detectPromptFamily(payload: any, context?: MultiStageContext | null): C
     .join(" ")
     .toLowerCase();
 
+  if (bespokeSignals.test(explicitFamily)) return "bespoke";
   if (/\bjct\b|design\s+and\s+build\s+sub-?contract|dbsubc/i.test(explicitFamily)) return "jct";
   if (/\bnec\b|nec4|nec3|\becs\b|engineering\s+and\s+construction\s+subcontract/i.test(explicitFamily)) return "nec";
 
+  if (hasBespoke && !hasJct && !hasNec) return "bespoke";
   if (hasJct && !hasNec) return "jct";
   if (hasNec && !hasJct) return "nec";
 
@@ -1569,11 +1742,21 @@ function detectPromptFamily(payload: any, context?: MultiStageContext | null): C
     return "nec";
   }
 
-  return "generic";
+  return "unsupported";
+}
+
+function assertSupportedPromptFamily(payload: any, context?: MultiStageContext | null): Exclude<ContractPromptFamily, "unsupported"> {
+  const family = detectPromptFamily(payload, context);
+  if (family === "unsupported") {
+    throw new Error(
+      "Contract type is not confirmed enough to generate a premium pack. Select NEC, JCT, Bespoke / Other or Unconfirmed with the required contract upload before generating.",
+    );
+  }
+  return family;
 }
 
 function getMultiStageSectionPrompt(sectionKey: MultiStageSectionKey, payload: any, context?: MultiStageContext | null) {
-  const family = detectPromptFamily(payload, context);
+  const family = assertSupportedPromptFamily(payload, context);
   console.info("[multi-stage] prompt routing", {
     sectionKey,
     family: PROMPT_FAMILY_LABELS[family],
@@ -1582,7 +1765,8 @@ function getMultiStageSectionPrompt(sectionKey: MultiStageSectionKey, payload: a
 
   if (family === "nec") return NEC_MULTI_STAGE_SECTION_PROMPTS[sectionKey];
   if (family === "jct") return JCT_MULTI_STAGE_SECTION_PROMPTS[sectionKey];
-  return MULTI_STAGE_SECTION_PROMPTS[sectionKey];
+  if (family === "bespoke") return BESPOKE_MULTI_STAGE_SECTION_PROMPTS[sectionKey];
+  throw new Error(`No supported prompt is configured for ${sectionKey}.`);
 }
 
 
@@ -1614,7 +1798,7 @@ const COMMERCIAL_PUSHBACK_SCHEMA = {
 } as const;
 
 function getCommercialPushbackPrompt(payload: any, context?: MultiStageContext | null) {
-  const family = detectPromptFamily(payload, context);
+  const family = assertSupportedPromptFamily(payload, context);
   console.info("[multi-stage] commercial pushback prompt routing", {
     family: PROMPT_FAMILY_LABELS[family],
     audit: MULTI_STAGE_PROMPT_ROUTING_AUDIT.pass,
@@ -1622,15 +1806,17 @@ function getCommercialPushbackPrompt(payload: any, context?: MultiStageContext |
 
   if (family === "nec") return COMMERCIAL_PUSHBACK_NEC_PROMPT;
   if (family === "jct") return COMMERCIAL_PUSHBACK_JCT_PROMPT;
-  return COMMERCIAL_PUSHBACK_PROMPT;
+  if (family === "bespoke") return BESPOKE_COMMERCIAL_PUSHBACK_PROMPT;
+  throw new Error("No supported commercial pushback prompt is configured for this contract.");
 }
 
 function getRebuttalPrompt(payload: any) {
-  const family = detectPromptFamily(payload, null);
+  const family = assertSupportedPromptFamily(payload, null);
   console.info("[rebuttal] prompt routing", { family: PROMPT_FAMILY_LABELS[family] });
   if (family === "nec") return REBUTTAL_NEC_PROMPT;
   if (family === "jct") return REBUTTAL_JCT_PROMPT;
-  return REBUTTAL_PROMPT;
+  if (family === "bespoke") return BESPOKE_REBUTTAL_PROMPT;
+  throw new Error("No supported rebuttal prompt is configured for this contract.");
 }
 
 function parseCommercialPushback(content: string): InternalCommercialIntelligence {
@@ -1698,7 +1884,7 @@ async function generateCommercialPushbackIntelligence(args: {
 }
 
 function getQaHarmonisationPrompt(payload: any, context?: MultiStageContext | null) {
-  const family = detectPromptFamily(payload, context);
+  const family = assertSupportedPromptFamily(payload, context);
   console.info("[multi-stage] QA prompt routing", {
     family: PROMPT_FAMILY_LABELS[family],
     audit: MULTI_STAGE_PROMPT_ROUTING_AUDIT.pass,
@@ -1706,7 +1892,8 @@ function getQaHarmonisationPrompt(payload: any, context?: MultiStageContext | nu
 
   if (family === "nec") return QA_HARMONISATION_NEC_PROMPT;
   if (family === "jct") return QA_HARMONISATION_JCT_PROMPT;
-  return QA_HARMONISATION_PROMPT;
+  if (family === "bespoke") return BESPOKE_QA_HARMONISATION_PROMPT;
+  throw new Error("No supported QA prompt is configured for this contract.");
 }
 
 type MultiStageDiagnostic = {
@@ -2041,6 +2228,7 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
   }
   const model = process.env.OPENAI_MODEL || "gpt-4o";
   const generationMode: AiGenerationMode = options?.generationMode === "multistage" ? "multistage" : "standard";
+  const initialPromptFamily = assertSupportedPromptFamily(payload, null);
 
   async function generateBaseDraft(multiStageContext?: MultiStageContext | null, lightweightMultiStageBaseline = false) {
     const userContent = [
@@ -2062,8 +2250,13 @@ export async function generateAiDraftFromPayload(payload: any, options?: { gener
     ].filter(Boolean).join("\n\n");
 
     async function callOpenAi(extraInstruction?: string) {
+      const systemPrompt = lightweightMultiStageBaseline
+        ? MULTI_STAGE_BASELINE_PROMPT
+        : initialPromptFamily === "bespoke"
+          ? BESPOKE_STANDARD_DRAFT_PROMPT
+          : COMMERCIAL_COPILOT_DRAFT_PROMPT;
       const messages = [
-        { role: "system", content: lightweightMultiStageBaseline ? MULTI_STAGE_BASELINE_PROMPT : COMMERCIAL_COPILOT_DRAFT_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: extraInstruction ? `${extraInstruction}\n\n${userContent}` : userContent },
       ];
       const res = await fetch("https://api.openai.com/v1/chat/completions", {

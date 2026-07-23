@@ -8,6 +8,10 @@ import { getContractLabel } from "@/lib/contracts";
 import { displayEventReference, displayEventTitle } from "@/lib/eventReference";
 import { readFinalTotal, recalculateEventFinancialSummary } from "@/lib/financialSummary";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
+import { applyDerivedPaymentTracking } from "@/lib/paymentTracking";
+import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
+import { OnboardingActivationDashboard } from "@/components/OnboardingActivation";
+import type { OnboardingState } from "@/lib/onboarding";
 import {
   PAYMENT_STATUS_OPTIONS,
   calculateTimeRisk,
@@ -20,6 +24,16 @@ import {
   normalisePaymentStatus,
   toDateInputValue,
 } from "@/lib/commercialControl";
+import {
+  AppCard,
+  IconBubble,
+  MiniSparkline,
+  RingProgress,
+  SmallIcon,
+  StatusBadge,
+  appUi,
+  toneColours,
+} from "@/components/appUi";
 
 type EventRow = {
   id: string;
@@ -50,6 +64,14 @@ type EventRow = {
   last_action_type?: string | null;
   last_action_date?: string | null;
   event_financial_summary?: unknown;
+};
+
+type EventActionRow = {
+  event_id: string;
+  action_type: string | null;
+  action_date: string | null;
+  created_at?: string | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type DashboardAction = {
@@ -84,6 +106,25 @@ type FocusProgress = {
   resources: boolean;
   prelims: boolean;
   review: boolean;
+};
+
+type DashboardStage = {
+  key: string;
+  label: string;
+  tone: "neutral" | "blue" | "orange" | "green" | "purple";
+  count: number;
+  value: number;
+  avgDays: number | null;
+};
+
+type RiskFlag = {
+  key: string;
+  label: string;
+  detail: string;
+  value: string;
+  href: string;
+  tone: "red" | "orange" | "blue" | "purple" | "green";
+  icon: "alert" | "clock" | "file" | "money" | "rocket";
 };
 
 const c = {
@@ -166,6 +207,79 @@ function daysBetween(from?: string | Date | null, to: string | Date | null = new
   return Math.floor((toDate.getTime() - fromDate.getTime()) / 86400000);
 }
 
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function recentMonthKeys(count = 8) {
+  const now = new Date();
+  const months: string[] = [];
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push(monthKey(d));
+  }
+  return months;
+}
+
+function endOfMonthFromKey(key: string) {
+  const [yearText, monthText] = key.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+  return new Date(year, month, 0, 23, 59, 59, 999);
+}
+
+function monthlySeries<T>(
+  rows: T[],
+  dateOf: (row: T) => string | Date | null | undefined,
+  valueOf: (row: T) => number,
+  options: { months?: string[]; cumulative?: boolean } = {}
+) {
+  const months = options.months ?? recentMonthKeys();
+  const byMonth = new Map(months.map((month) => [month, 0]));
+
+  for (const row of rows) {
+    const date = dateOnly(dateOf(row));
+    if (!date) continue;
+    const key = monthKey(date);
+    if (!byMonth.has(key)) continue;
+    byMonth.set(key, (byMonth.get(key) || 0) + valueOf(row));
+  }
+
+  let running = 0;
+  return months.map((month) => {
+    const value = byMonth.get(month) || 0;
+    if (!options.cumulative) return value;
+    running += value;
+    return running;
+  });
+}
+
+function monthlyAverageSeries<T>(
+  rows: T[],
+  dateOf: (row: T) => string | Date | null | undefined,
+  valueOf: (row: T) => number | null | undefined,
+  months = recentMonthKeys()
+) {
+  const byMonth = new Map(months.map((month) => [month, { total: 0, count: 0 }]));
+
+  for (const row of rows) {
+    const date = dateOnly(dateOf(row));
+    const value = valueOf(row);
+    if (!date || typeof value !== "number" || !Number.isFinite(value)) continue;
+    const key = monthKey(date);
+    const bucket = byMonth.get(key);
+    if (!bucket) continue;
+    bucket.total += value;
+    bucket.count += 1;
+  }
+
+  return months.map((month) => {
+    const bucket = byMonth.get(month);
+    return bucket && bucket.count > 0 ? Math.round(bucket.total / bucket.count) : 0;
+  });
+}
+
 function pluralDays(days: number) {
   return `${days} day${days === 1 ? "" : "s"}`;
 }
@@ -187,6 +301,16 @@ function cleanMoneyInput(value: string) {
 
 function numberOrNull(value?: number | null) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function metadataNumber(metadata: Record<string, unknown> | null | undefined, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function metadataString(metadata: Record<string, unknown> | null | undefined, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "string" ? value : null;
 }
 
 function submittedAmount(event: EventRow, fallbackValue?: number | null) {
@@ -328,6 +452,11 @@ function isSubmissionOutstanding(status?: string | null) {
 function isSubmittedOrAccepted(status?: string | null) {
   const s = normaliseCommercialStatus(status);
   return s === "submitted" || s === "accepted";
+}
+
+function isAgreedStatus(status?: string | null) {
+  const s = normaliseCommercialStatus(status);
+  return s === "accepted" || s === "paid" || s === "complete";
 }
 
 function getPaymentState(paymentStatus?: string | null) {
@@ -778,11 +907,218 @@ function EmptyState() {
   );
 }
 
+function DashboardMetric({
+  label,
+  value,
+  hint,
+  tone,
+  spark,
+  icon,
+}: {
+  label: string;
+  value: React.ReactNode;
+  hint: string;
+  tone: "neutral" | "blue" | "green" | "orange" | "red" | "purple";
+  spark?: number[];
+  icon: React.ReactNode;
+}) {
+  const tc = toneColours(tone);
+  return (
+    <AppCard
+      style={{
+        padding: 18,
+        minHeight: 124,
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
+        gap: 12,
+        overflow: "hidden",
+      }}
+      tone={tone === "neutral" ? "neutral" : tone}
+    >
+      <div style={{ minWidth: 0, display: "grid", gap: 7, alignContent: "start" }}>
+        <div style={{ fontSize: 11, lineHeight: 1.2, fontWeight: 800, color: appUi.muted, textTransform: "uppercase", letterSpacing: 0.65 }}>{label}</div>
+        <div style={{ fontSize: 26, lineHeight: 1, fontWeight: 850, color: appUi.text, letterSpacing: 0 }}>{value}</div>
+        <div style={{ fontSize: 12, lineHeight: 1.4, color: appUi.muted }}>{hint}</div>
+      </div>
+      <div style={{ width: 92, display: "grid", alignContent: "space-between", justifyItems: "end", gap: 8 }}>
+        <IconBubble tone={tone === "neutral" ? "blue" : tone} size={36}>{icon}</IconBubble>
+        {spark ? <MiniSparkline values={spark} tone={tone === "neutral" ? "blue" : tone} height={36} /> : <span style={{ width: 46, height: 4, borderRadius: 999, background: tc.border }} />}
+      </div>
+    </AppCard>
+  );
+}
+
+function DashboardTopCard({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <AppCard style={{ padding: 22, display: "grid", gap: 18, alignContent: "start", overflow: "hidden" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 850, color: appUi.muted, textTransform: "uppercase", letterSpacing: 0.75 }}>{title}</div>
+        {action}
+      </div>
+      {children}
+    </AppCard>
+  );
+}
+
+function PipelineStage({ stage }: { stage: DashboardStage }) {
+  const tc = toneColours(stage.tone);
+  return (
+    <div style={{ minWidth: 0, display: "grid", justifyItems: "center", gap: 8, textAlign: "center" }}>
+      <div style={{ width: 34, height: 34, borderRadius: 999, display: "grid", placeItems: "center", background: tc.bg, border: `1px solid ${tc.border}`, color: tc.text }}>
+        <SmallIcon name={stage.key === "paid" ? "check" : stage.key === "draft" ? "file" : stage.key === "submitted" ? "rocket" : stage.key === "agreed" ? "money" : "clock"} />
+      </div>
+      <div style={{ minHeight: 38 }}>
+        <div style={{ color: tc.text, fontSize: 12, lineHeight: 1.15, fontWeight: 850 }}>{stage.label}</div>
+      </div>
+      <div style={{ color: appUi.text, fontSize: 12, lineHeight: 1.35, fontWeight: 750 }}>{stage.count} {stage.count === 1 ? "event" : "events"}</div>
+      <div style={{ color: appUi.text, fontSize: 12, lineHeight: 1.35, fontWeight: 850 }}>{money(stage.value)}</div>
+      <div style={{ color: appUi.muted, fontSize: 11, lineHeight: 1.35 }}>
+        {stage.avgDays === null ? "No age yet" : `Avg ${stage.avgDays} days`}
+      </div>
+    </div>
+  );
+}
+
+function OpportunityRadar({ items }: { items: Array<{ label: string; value: number; tone: "blue" | "red" | "orange" | "purple" }> }) {
+  return (
+    <div className="dashboard-radar-detail" style={{ display: "grid", gridTemplateColumns: "minmax(210px, 1fr) minmax(210px, 0.98fr)", gap: 24, alignItems: "center", minWidth: 0 }}>
+      <div style={{ position: "relative", width: "100%", aspectRatio: "1 / 1", maxWidth: 245, margin: "0 auto", minWidth: 0 }}>
+        {[92, 70, 48, 26].map((size, index) => (
+          <span
+            key={size}
+            style={{
+              position: "absolute",
+              inset: `${(100 - size) / 2}%`,
+              borderRadius: "50%",
+              border: "1px solid #e9e3ff",
+              background: index === 3 ? "linear-gradient(135deg, #9b7cff, #6d4aff)" : "transparent",
+              boxShadow: index === 3 ? "0 16px 35px rgba(109, 74, 255, 0.28)" : "none",
+            }}
+          />
+        ))}
+        <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "white" }}>
+          <SmallIcon name="radar" />
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: 16, minWidth: 0, borderLeft: `1px solid ${appUi.border}`, paddingLeft: 24 }}>
+        {items.map((item) => {
+          const tc = toneColours(item.tone);
+          return (
+            <div key={item.label} style={{ display: "grid", gridTemplateColumns: "22px minmax(0, 1fr)", gap: 12, alignItems: "start", minWidth: 0 }}>
+              <span style={{ width: 11, height: 11, marginTop: 7, borderRadius: 999, background: tc.text, boxShadow: `0 0 0 8px ${tc.bg}` }} />
+              <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
+                <span style={{ color: tc.text, fontSize: 16, lineHeight: 1.1, fontWeight: 900, whiteSpace: "nowrap" }}>{money(item.value)}</span>
+                <span style={{ color: appUi.muted, fontSize: 12, fontWeight: 700, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function QuickAccessTile({
+  href,
+  label,
+  hint,
+  icon,
+  tone,
+}: {
+  href: string;
+  label: string;
+  hint: string;
+  icon: React.ReactNode;
+  tone: "blue" | "green" | "orange" | "purple" | "red";
+}) {
+  return (
+    <Link
+      href={href}
+      style={{
+        textDecoration: "none",
+        display: "grid",
+        gridTemplateColumns: "42px minmax(0, 1fr)",
+        gap: 12,
+        alignItems: "center",
+        padding: 14,
+        borderRadius: 14,
+        background: appUi.surface,
+        border: `1px solid ${appUi.border}`,
+        boxShadow: appUi.shadowSoft,
+        transition: "transform 160ms ease, box-shadow 160ms ease",
+      }}
+      onMouseEnter={(ev) => {
+        ev.currentTarget.style.transform = "translateY(-2px)";
+        ev.currentTarget.style.boxShadow = appUi.shadow;
+      }}
+      onMouseLeave={(ev) => {
+        ev.currentTarget.style.transform = "translateY(0)";
+        ev.currentTarget.style.boxShadow = appUi.shadowSoft;
+      }}
+    >
+      <IconBubble tone={tone} size={42}>{icon}</IconBubble>
+      <span style={{ display: "grid", gap: 3, minWidth: 0 }}>
+        <span style={{ color: appUi.text, fontSize: 12, fontWeight: 850 }}>{label}</span>
+        <span style={{ color: appUi.muted, fontSize: 11.5, lineHeight: 1.35 }}>{hint}</span>
+      </span>
+    </Link>
+  );
+}
+
+function RiskFlagTile({ flag }: { flag: RiskFlag }) {
+  const tc = toneColours(flag.tone);
+  return (
+    <Link
+      href={flag.href}
+      style={{
+        textDecoration: "none",
+        border: `1px solid ${tc.border}`,
+        background: flag.tone === "red" || flag.tone === "orange" ? tc.bg : appUi.surface,
+        borderRadius: 14,
+        padding: 13,
+        display: "grid",
+        gridTemplateColumns: "34px minmax(0, 1fr) auto",
+        gap: 11,
+        alignItems: "center",
+        minWidth: 0,
+        transition: "transform 160ms ease, box-shadow 160ms ease",
+      }}
+      onMouseEnter={(ev) => {
+        ev.currentTarget.style.transform = "translateY(-2px)";
+        ev.currentTarget.style.boxShadow = appUi.shadowSoft;
+      }}
+      onMouseLeave={(ev) => {
+        ev.currentTarget.style.transform = "translateY(0)";
+        ev.currentTarget.style.boxShadow = "none";
+      }}
+    >
+      <span style={{ width: 34, height: 34, borderRadius: 12, display: "grid", placeItems: "center", background: tc.bg, color: tc.text, border: `1px solid ${tc.border}` }}>
+        <SmallIcon name={flag.icon} />
+      </span>
+      <span style={{ display: "grid", gap: 3, minWidth: 0 }}>
+        <span style={{ color: appUi.text, fontSize: 12.5, lineHeight: 1.2, fontWeight: 900, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{flag.label}</span>
+        <span style={{ color: appUi.muted, fontSize: 11.5, lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{flag.detail}</span>
+      </span>
+      <span style={{ color: tc.text, fontSize: 13, lineHeight: 1.1, fontWeight: 900, whiteSpace: "nowrap" }}>{flag.value}</span>
+    </Link>
+  );
+}
+
 function AppHomeContent() {
   const searchParams = useSearchParams();
   const trackingTargetId = searchParams.get("trackPayment");
+  const registerRequested = searchParams.get("register") === "1";
   const trackingTargetRef = useRef<HTMLDivElement | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [eventActions, setEventActions] = useState<EventActionRow[]>([]);
   const [eventValues, setEventValues] = useState<EventValueMap>({});
   const [loading, setLoading] = useState(true);
   const [selectedProject, setSelectedProject] = useState("all");
@@ -798,6 +1134,7 @@ function AppHomeContent() {
   const [deleteConfirmValue, setDeleteConfirmValue] = useState("");
   const [focusProgress, setFocusProgress] = useState<FocusProgress | null>(null);
   const [focusLoading, setFocusLoading] = useState(false);
+  const [activationState, setActivationState] = useState<OnboardingState | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -848,6 +1185,22 @@ function AppHomeContent() {
         const eventRows = (rows ?? []) as EventRow[];
         setEvents(eventRows);
 
+        const actionRows = await (supabase as any)
+          .from("event_actions")
+          .select("event_id,action_type,action_date,created_at,metadata")
+          .eq("user_id", user.id)
+          .order("action_date", { ascending: true });
+
+        if (!active) return;
+        if (!actionRows.error) {
+          setEventActions((actionRows.data ?? []) as EventActionRow[]);
+        } else if (isOptionalSchemaError(actionRows.error)) {
+          setEventActions([]);
+        } else {
+          console.warn("Could not load dashboard action history", actionRows.error);
+          setEventActions([]);
+        }
+
         const values: EventValueMap = {};
         for (const event of eventRows) {
           const savedTotal = readFinalTotal(event.event_financial_summary);
@@ -887,6 +1240,10 @@ function AppHomeContent() {
     setShowAll(true);
     setOpenTrackingId(trackingTargetId);
   }, [trackingTargetId]);
+
+  useEffect(() => {
+    if (registerRequested) setShowAll(true);
+  }, [registerRequested]);
 
   const projectOptions = useMemo(() => {
     const projects = Array.from(
@@ -1034,6 +1391,7 @@ function AppHomeContent() {
   const metrics = useMemo(() => {
     let totalValue = 0;
     let unpaid = 0;
+    let awaitingAssessment = 0;
     let overdue = 0;
     let paid = 0;
     let notSubmitted = 0;
@@ -1041,16 +1399,18 @@ function AppHomeContent() {
     for (const row of activeEnriched) {
       const value = row.value ?? 0;
       const closed = isCommerciallyClosed(row.status, row.event.payment_status);
+      const paymentStatus = normalisePaymentStatus(row.event.payment_status);
       const balance = balanceOutstanding(row.event, value);
       totalValue += value;
 
       paid += paidAmount(row.event, value);
       if (!closed && isSubmissionOutstanding(row.status)) notSubmitted += value;
+      if (!closed && row.status === "submitted" && paymentStatus === "submitted_for_payment") awaitingAssessment += submittedAmount(row.event, value);
       if (!closed && isUnpaidCe(row.status, row.event.payment_status)) unpaid += balance;
       if (!closed && isOverdueCe(row.event)) overdue += balance;
     }
 
-    return { totalValue, unpaid, overdue, paid, notSubmitted };
+    return { totalValue, awaitingAssessment, unpaid, overdue, paid, notSubmitted };
   }, [activeEnriched]);
 
   useEffect(() => {
@@ -1256,6 +1616,324 @@ function AppHomeContent() {
       .slice(0, 8);
   }, [activeEnriched]);
 
+  const dashboardStages = useMemo<DashboardStage[]>(() => {
+    const stageDefinitions: Array<Omit<DashboardStage, "count" | "value" | "avgDays"> & { matcher: (row: (typeof activeEnriched)[number]) => boolean }> = [
+      { key: "draft", label: "Draft", tone: "neutral", matcher: (row) => row.status === "draft" },
+      { key: "review", label: "Ready for Review", tone: "blue", matcher: (row) => row.status === "review" || row.status === "ready" },
+      { key: "submitted", label: "Submitted", tone: "blue", matcher: (row) => row.status === "submitted" },
+      { key: "assessment", label: "Awaiting Assessment", tone: "orange", matcher: (row) => row.status === "submitted" && normalisePaymentStatus(row.event.payment_status) === "submitted_for_payment" },
+      { key: "negotiation", label: "Negotiation", tone: "orange", matcher: (row) => row.status === "rejected" || normalisePaymentStatus(row.event.payment_status) === "disputed_short_paid" },
+      { key: "agreed", label: "Agreed", tone: "green", matcher: (row) => row.status === "accepted" || normalisePaymentStatus(row.event.payment_status) === "assessed" || normalisePaymentStatus(row.event.payment_status) === "part_paid" },
+      { key: "paid", label: "Paid", tone: "green", matcher: (row) => isCommerciallyClosed(row.status, row.event.payment_status) && row.status !== "void" },
+    ];
+
+    const stageValue = (stageKey: string, row: (typeof activeEnriched)[number]) => {
+      const value = row.value ?? 0;
+      const paymentStatus = normalisePaymentStatus(row.event.payment_status);
+      if (stageKey === "assessment") return submittedAmount(row.event, value);
+      if (stageKey === "agreed") return assessedAmount(row.event, value);
+      if (stageKey === "paid") return paidAmount(row.event, value);
+      if (stageKey === "negotiation" && paymentStatus === "disputed_short_paid") return balanceOutstanding(row.event, value);
+      return value;
+    };
+
+    return stageDefinitions.map((stage) => {
+      const rows = activeEnriched.filter(stage.matcher);
+      const ages = rows
+        .map((row) => daysBetween(row.event.created_at))
+        .filter((days): days is number => typeof days === "number" && Number.isFinite(days));
+      const avgDays = ages.length ? Math.round(ages.reduce((sum, days) => sum + days, 0) / ages.length) : null;
+      return {
+        key: stage.key,
+        label: stage.label,
+        tone: stage.tone,
+        count: rows.length,
+        value: rows.reduce((sum, row) => sum + stageValue(stage.key, row), 0),
+        avgDays,
+      };
+    });
+  }, [activeEnriched]);
+
+  const trendMonths = useMemo(() => recentMonthKeys(8), [activeEnriched.length]);
+
+  const recoveryTrend = useMemo(() => {
+    if (!activeEnriched.length) return [0, 0];
+    return trendMonths.map((month) => {
+      const monthEnd = endOfMonthFromKey(month);
+      if (!monthEnd) return 0;
+      return activeEnriched.reduce((sum, row) => {
+        const created = dateOnly(row.event.created_at);
+        return created && created.getTime() <= monthEnd.getTime() ? sum + (row.value ?? 0) : sum;
+      }, 0);
+    });
+  }, [activeEnriched, trendMonths]);
+
+  const recoveryTrendChange = useMemo(() => {
+    const latest = recoveryTrend[recoveryTrend.length - 1] ?? 0;
+    const previous = recoveryTrend[recoveryTrend.length - 2] ?? 0;
+    if (previous <= 0 && latest <= 0) return "No change";
+    if (previous <= 0) return "New recovery value";
+    const change = Math.round(((latest - previous) / previous) * 100);
+    if (change === 0) return "No change vs last month";
+    return `${change > 0 ? "↑" : "↓"} ${Math.abs(change)}% vs last month`;
+  }, [recoveryTrend]);
+
+  const radarItems = useMemo(() => {
+    const readyToSubmit = activeEnriched
+      .filter((row) => row.status === "ready")
+      .reduce((sum, row) => sum + (row.value ?? 0), 0);
+    const awaitingReview = activeEnriched
+      .filter((row) => row.status === "review" || row.status === "draft")
+      .reduce((sum, row) => sum + (row.value ?? 0), 0);
+    const noticeDeadline = activeEnriched
+      .filter((row) => isSubmissionOutstanding(row.status) && (row.timeRisk.state === "overdue" || row.timeRisk.state === "due_soon"))
+      .reduce((sum, row) => sum + (row.value ?? 0), 0);
+    return [
+      { label: "Ready to submit", value: readyToSubmit, tone: "blue" as const },
+      { label: "Payment overdue", value: metrics.overdue, tone: "red" as const },
+      { label: "Awaiting review", value: awaitingReview, tone: "orange" as const },
+      { label: "Notice deadline", value: noticeDeadline, tone: "purple" as const },
+    ];
+  }, [activeEnriched, metrics.overdue]);
+
+  const todayOpportunity = useMemo(() => {
+    return activeEnriched.reduce((sum, row) => {
+      if (isOverdueCe(row.event)) return sum + balanceOutstanding(row.event, row.value);
+      if (isSubmissionOutstanding(row.status)) return sum + (row.value ?? 0);
+      return sum;
+    }, 0);
+  }, [activeEnriched]);
+
+  const projectSummaries = useMemo(() => {
+    const groups = new Map<string, typeof activeEnriched>();
+    for (const row of activeEnriched) {
+      const project = row.event.project_name?.trim() || "Project not set";
+      groups.set(project, [...(groups.get(project) ?? []), row]);
+    }
+    return Array.from(groups.entries())
+      .map(([project, rows]) => {
+        const recoverable = rows.reduce((sum, row) => sum + (row.value ?? 0), 0);
+        const recovered = rows.reduce((sum, row) => sum + paidAmount(row.event, row.value), 0);
+        const outstanding = rows.reduce((sum, row) => sum + (isCommerciallyClosed(row.status, row.event.payment_status) ? 0 : balanceOutstanding(row.event, row.value)), 0);
+        const overdue = rows.filter((row) => isOverdueCe(row.event)).length;
+        const paidScore = recoverable > 0 ? (recovered / recoverable) * 70 : 0;
+        const outstandingPenalty = recoverable > 0 ? (outstanding / recoverable) * 20 : 0;
+        const overduePenalty = Math.min(35, overdue * 12);
+        const health = recoverable > 0
+          ? Math.max(0, Math.min(100, Math.round(65 + paidScore - outstandingPenalty - overduePenalty)))
+          : 0;
+        return { project, recoverable, recovered, outstanding, overdue, health };
+      })
+      .sort((a, b) => b.recoverable - a.recoverable)
+      .slice(0, 3);
+  }, [activeEnriched]);
+
+  const insightCards = useMemo(() => {
+    const eventById = new Map(activeEnriched.map((row) => [row.event.id, row]));
+    const paidActions = eventActions.filter((action) => {
+      const paymentStatus = metadataString(action.metadata, "payment_status");
+      return action.action_type === "paid" || paymentStatus === "paid";
+    });
+    const agreementActions = eventActions.filter((action) => {
+      const ceStatus = metadataString(action.metadata, "ce_status") || metadataString(action.metadata, "status");
+      const paymentStatus = metadataString(action.metadata, "payment_status");
+      return (
+        action.action_type === "status_accepted" ||
+        ceStatus === "accepted" ||
+        paymentStatus === "assessed" ||
+        paymentStatus === "part_paid" ||
+        paymentStatus === "paid"
+      );
+    });
+
+    const paidThisMonth = activeEnriched.reduce((sum, row) => {
+      const paid = paidAmount(row.event, row.value);
+      const matchingPaidAction = paidActions.find((action) => action.event_id === row.event.id);
+      const date = paid > 0 ? dateOnly(matchingPaidAction?.action_date || row.event.agreed_payment_date || row.event.last_action_date) : null;
+      const now = new Date();
+      if (date && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear()) return sum + paid;
+      return sum;
+    }, 0);
+    const agreedRows = activeEnriched.filter((row) => isAgreedStatus(row.status) || ["assessed", "part_paid", "paid"].includes(normalisePaymentStatus(row.event.payment_status)));
+    const avgAgreement = agreedRows.length
+      ? Math.round(agreedRows.reduce((sum, row) => sum + Math.max(0, daysBetween(row.event.created_at, row.event.last_action_date || row.event.agreed_payment_date || row.event.submitted_date || new Date()) ?? 0), 0) / agreedRows.length)
+      : 0;
+    const paidRows = activeEnriched.filter((row) => normalisePaymentStatus(row.event.payment_status) === "paid");
+    const avgPayment = paidRows.length
+      ? Math.round(paidRows.reduce((sum, row) => sum + Math.max(0, daysBetween(row.event.submitted_date || row.event.created_at, row.event.last_action_date || new Date()) ?? 0), 0) / paidRows.length)
+      : 0;
+    const noticeRows = activeEnriched.filter((row) => row.timeRisk.deadline);
+    const noticeCompliance = noticeRows.length
+      ? Math.round((noticeRows.filter((row) => row.timeRisk.state !== "overdue").length / noticeRows.length) * 100)
+      : null;
+    const paidTrendFromActions = monthlySeries(
+      paidActions,
+      (action) => action.action_date || action.created_at,
+      (action) => {
+        const row = eventById.get(action.event_id);
+        return metadataNumber(action.metadata, "paid_amount") ?? (row ? paidAmount(row.event, row.value) : 0);
+      },
+      { months: trendMonths }
+    );
+    const paidTrendFallback = monthlySeries(
+      activeEnriched,
+      (row) => normalisePaymentStatus(row.event.payment_status) === "paid" ? row.event.agreed_payment_date || row.event.last_action_date : null,
+      (row) => paidAmount(row.event, row.value),
+      { months: trendMonths }
+    );
+    const paidTrend = paidTrendFromActions.some(Boolean) ? paidTrendFromActions : paidTrendFallback;
+    const agreementTrendFromActions = monthlyAverageSeries(
+      agreementActions,
+      (action) => action.action_date || action.created_at,
+      (action) => {
+        const row = eventById.get(action.event_id);
+        return row ? Math.max(0, daysBetween(row.event.created_at, action.action_date || action.created_at || new Date()) ?? 0) : null;
+      },
+      trendMonths
+    );
+    const agreementTrendFallback = monthlyAverageSeries(
+      agreedRows,
+      (row) => row.event.last_action_date || row.event.agreed_payment_date || row.event.submitted_date || row.event.created_at,
+      (row) => Math.max(0, daysBetween(row.event.created_at, row.event.last_action_date || row.event.agreed_payment_date || row.event.submitted_date || new Date()) ?? 0),
+      trendMonths
+    );
+    const agreementTrend = agreementTrendFromActions.some(Boolean) ? agreementTrendFromActions : agreementTrendFallback;
+    const paymentTrendFromActions = monthlyAverageSeries(
+      paidActions,
+      (action) => action.action_date || action.created_at,
+      (action) => {
+        const row = eventById.get(action.event_id);
+        return row ? Math.max(0, daysBetween(row.event.submitted_date || row.event.created_at, action.action_date || action.created_at || new Date()) ?? 0) : null;
+      },
+      trendMonths
+    );
+    const paymentTrendFallback = monthlyAverageSeries(
+      paidRows,
+      (row) => row.event.agreed_payment_date || row.event.last_action_date,
+      (row) => Math.max(0, daysBetween(row.event.submitted_date || row.event.created_at, row.event.last_action_date || row.event.agreed_payment_date || new Date()) ?? 0),
+      trendMonths
+    );
+    const paymentTrend = paymentTrendFromActions.some(Boolean) ? paymentTrendFromActions : paymentTrendFallback;
+    const noticeComplianceTrend = trendMonths.map((month) => {
+      const rowsByMonth = noticeRows.filter((row) => {
+        const deadline = row.timeRisk.deadline;
+        return deadline && monthKey(deadline) === month;
+      });
+      if (!rowsByMonth.length) return 0;
+      const compliant = rowsByMonth.filter((row) => row.timeRisk.state !== "overdue").length;
+      return Math.round((compliant / rowsByMonth.length) * 100);
+    });
+    const flatSpark = [0, 0];
+    return [
+      { label: "Recoverable Value Over Time", value: money(metrics.totalValue), tone: "green" as const, spark: recoveryTrend },
+      { label: "Money Recovered This Month", value: money(paidThisMonth), tone: "green" as const, spark: paidTrend.some(Boolean) ? paidTrend : flatSpark },
+      { label: "Average Time to Agreement", value: avgAgreement ? `${avgAgreement} days` : "No data yet", tone: "purple" as const, spark: agreementTrend.some(Boolean) ? agreementTrend : flatSpark },
+      { label: "Average Time to Payment", value: avgPayment ? `${avgPayment} days` : "No data yet", tone: "orange" as const, spark: paymentTrend.some(Boolean) ? paymentTrend : flatSpark },
+      { label: "Notice Compliance", value: noticeCompliance === null ? "No notices yet" : `${noticeCompliance}%`, tone: "green" as const, spark: noticeComplianceTrend.some(Boolean) ? noticeComplianceTrend : flatSpark },
+    ];
+  }, [activeEnriched, eventActions, metrics.totalValue, recoveryTrend, trendMonths]);
+
+  const riskFlags = useMemo<RiskFlag[]>(() => {
+    const rows = activeEnriched.filter((row) => !isCommerciallyClosed(row.status, row.event.payment_status));
+    const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+    const valueOf = (items: typeof rows) => items.reduce((sum, row) => sum + (row.value ?? 0), 0);
+    const balanceOf = (items: typeof rows) => items.reduce((sum, row) => sum + balanceOutstanding(row.event, row.value), 0);
+    const biggest = (items: typeof rows) => [...items].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))[0];
+    const flags: RiskFlag[] = [];
+
+    const overdue = rows.filter((row) => isOverdueCe(row.event));
+    const rejected = rows.filter((row) => row.status === "rejected");
+    const noticeRisk = rows.filter((row) => isSubmissionOutstanding(row.status) && (row.timeRisk.state === "overdue" || row.timeRisk.state === "due_soon"));
+    const shortPaid = rows.filter((row) => {
+      const paymentStatus = normalisePaymentStatus(row.event.payment_status);
+      return paymentStatus === "disputed_short_paid" || Number(row.event.disallowed_amount ?? 0) > 0;
+    });
+    const ready = rows.filter((row) => row.status === "ready");
+    const unissued = rows.filter((row) => isSubmissionOutstanding(row.status) && (row.value ?? 0) > 0);
+
+    if (overdue.length) {
+      const first = biggest(overdue);
+      flags.push({
+        key: "overdue",
+        label: "Payment follow-up risk",
+        detail: `${plural(overdue.length, "CE")} past expected payment`,
+        value: money(balanceOf(overdue)),
+        href: first ? paymentTrackingHref(first.event.id) : "/app/priorities",
+        tone: "red",
+        icon: "clock",
+      });
+    }
+
+    if (rejected.length) {
+      const first = biggest(rejected);
+      flags.push({
+        key: "rejected",
+        label: "Rejected CE needs rebuttal",
+        detail: `${plural(rejected.length, "event")} challenged by client`,
+        value: money(valueOf(rejected)),
+        href: first ? `/app/event/${first.event.id}/review?mode=rebuttal` : "/app/priorities",
+        tone: "red",
+        icon: "alert",
+      });
+    }
+
+    if (shortPaid.length) {
+      const first = biggest(shortPaid);
+      flags.push({
+        key: "short-paid",
+        label: "Short-paid / disputed value",
+        detail: `${plural(shortPaid.length, "CE")} needs commercial response`,
+        value: money(balanceOf(shortPaid)),
+        href: first ? paymentTrackingHref(first.event.id) : "/app/priorities",
+        tone: "orange",
+        icon: "money",
+      });
+    }
+
+    if (noticeRisk.length) {
+      const first = noticeRisk
+        .slice()
+        .sort((a, b) => (a.timeRisk.deadline?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.timeRisk.deadline?.getTime() ?? Number.MAX_SAFE_INTEGER))[0];
+      flags.push({
+        key: "notice-risk",
+        label: "Notice position exposed",
+        detail: `${plural(noticeRisk.length, "event")} close to or past deadline`,
+        value: first?.timeRisk.label ?? "Review",
+        href: first ? `/app/event/${first.event.id}` : "/app/priorities",
+        tone: "orange",
+        icon: "alert",
+      });
+    }
+
+    if (ready.length) {
+      const first = biggest(ready);
+      flags.push({
+        key: "ready",
+        label: "Ready packs not issued",
+        detail: `${plural(ready.length, "pack")} ready for final review`,
+        value: money(valueOf(ready)),
+        href: first ? `/app/event/${first.event.id}/review` : "/app?register=1",
+        tone: "blue",
+        icon: "file",
+      });
+    }
+
+    if (unissued.length) {
+      const first = biggest(unissued);
+      flags.push({
+        key: "unissued",
+        label: "Value still unissued",
+        detail: `${plural(unissued.length, "CE")} sitting before submission`,
+        value: money(valueOf(unissued)),
+        href: first ? `/app/event/${first.event.id}` : "/app?register=1",
+        tone: "purple",
+        icon: "rocket",
+      });
+    }
+
+    return flags.slice(0, 4);
+  }, [activeEnriched]);
+
   function startRename(event: EventRow) {
     setRenamingId(event.id);
     setRenameValue(event.title || "");
@@ -1449,10 +2127,7 @@ function AppHomeContent() {
       Object.prototype.hasOwnProperty.call(next, "paid_amount") ||
       Object.prototype.hasOwnProperty.call(next, "disallowed_amount")
     ) {
-      const merged = { ...(previous || ({} as EventRow)), ...patch };
-      const assessed = assessedAmount(merged, currentValue);
-      const paid = paidAmount(merged, currentValue);
-      patch.balance_outstanding = Math.max(0, assessed - paid);
+      Object.assign(patch, applyDerivedPaymentTracking(previous || ({} as EventRow), patch, currentValue));
       patch.last_action_type = "value_updated";
       patch.last_action_date = actionToday;
     }
@@ -1495,92 +2170,221 @@ function AppHomeContent() {
       if (actionInsert.error) {
         console.warn("CE register tracking saved without action history", actionInsert.error);
       }
+
+      void trackAnalyticsWithUser(supabase, "payment_status_updated", {
+        event_id: eventId,
+        action_type: patch.last_action_type || "tracking_updated",
+        ce_status: patch.status || previous?.status || null,
+        payment_status: patch.payment_status || previous?.payment_status || null,
+        paid_amount: patch.paid_amount ?? null,
+        assessed_amount: patch.assessed_amount ?? null,
+        disallowed_amount: patch.disallowed_amount ?? null,
+        balance_outstanding: patch.balance_outstanding ?? null,
+      });
     } catch (err) {
       console.warn("Failed to update CE register tracking", err);
       if (previous && hasCoreTrackingChange(next)) setEvents((prev) => prev.map((e) => (e.id === eventId ? previous : e)));
     }
   }
 
+  if (!registerRequested && !loading && events.length === 0 && activationState !== "COMPLETE") {
+    return (
+      <div style={{ background: appUi.bg, minHeight: "100vh" }}>
+        <OnboardingActivationDashboard onStateChange={setActivationState} />
+      </div>
+    );
+  }
+
   return (
-    <div style={{ background: c.bg, minHeight: "100vh" }}>
-      <div style={{ maxWidth: 1240, margin: "0 auto", padding: "34px 24px 44px" }}>
-        <div style={{ display: "grid", gap: 18 }}>
-          <section
-            style={{
-              background: c.raised,
-              border: `1px solid ${c.border}`,
-              borderRadius: 24,
-              padding: 26,
-              boxShadow: "0 1px 2px rgba(15,23,42,0.03)",
-            }}
-          >
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.35fr) minmax(280px, 0.65fr)", gap: 28, alignItems: "end" }}>
-              <div style={{ display: "grid", gap: 14 }}>
-                <div style={{ fontSize: 12, fontWeight: 650, color: c.sub, letterSpacing: 0.7, textTransform: "uppercase" }}>Recovery control panel</div>
-                <div style={{ fontSize: 26, fontWeight: 650, lineHeight: 1.16, letterSpacing: 0, color: c.text, maxWidth: 760 }}>
-                  See what value is live, what is stuck, and what needs action to get paid.
-                </div>
-                <div style={{ fontSize: 14, lineHeight: 1.65, color: c.sub, maxWidth: 720 }}>
-                  The dashboard stays deliberately simple: recoverable value first, payment risk second, detail only when opened.
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-                <label style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
-                  <span style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}>Project filter</span>
-                  <select
-                    value={selectedProject}
-                    onChange={(e) => setSelectedProject(e.target.value)}
-                    style={{
-                      height: 48,
-                      minWidth: 176,
-                      padding: "0 38px 0 15px",
-                      borderRadius: 16,
-                      border: `1px solid ${c.border}`,
-                      background: c.input,
-                      color: c.text,
-                      fontWeight: 650,
-                      fontSize: 14,
-                      cursor: "pointer",
-                      appearance: "none",
-                    }}
-                  >
-                    <option value="all">All Projects</option>
-                    {projectOptions.map((project) => (
-                      <option key={project} value={project}>{project}</option>
-                    ))}
-                  </select>
-                  <span aria-hidden="true" style={{ position: "absolute", right: 14, color: c.sub, fontSize: 12, pointerEvents: "none" }}>▼</span>
-                </label>
-                <Link href="/app/new" style={{ textDecoration: "none" }}>
-                  <button
-                    style={{
-                      height: 48,
-                      padding: "0 17px",
-                      borderRadius: 16,
-                      border: `1px solid ${c.black}`,
-                      background: c.black,
-                      color: c.blackContrast,
-                      fontWeight: 650,
-                      fontSize: 14,
-                      cursor: "pointer",
-                    }}
-                  >
-                    New CE
-                  </button>
-                </Link>
-                <QuietButton href="/app/ewns">EWN Register</QuietButton>
-                <QuietButton href="/app/rates">Rate cards</QuietButton>
-              </div>
+    <div style={{ background: appUi.bg, minHeight: "100vh" }}>
+      <div style={{ width: "100%", margin: "0 auto", padding: "6px 0 44px" }}>
+        <div style={{ display: "grid", gap: 16 }}>
+          <header style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", minHeight: 44 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end", alignItems: "center" }}>
+              <label style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                <span style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}>Project filter</span>
+                <select
+                  value={selectedProject}
+                  onChange={(e) => setSelectedProject(e.target.value)}
+                  style={{
+                    height: 44,
+                    minWidth: 156,
+                    padding: "0 36px 0 14px",
+                    borderRadius: 13,
+                    border: `1px solid ${appUi.border}`,
+                    background: appUi.surface,
+                    color: appUi.text,
+                    fontWeight: 750,
+                    fontSize: 13,
+                    cursor: "pointer",
+                    appearance: "none",
+                    boxShadow: appUi.shadowSoft,
+                  }}
+                >
+                  <option value="all">All Projects</option>
+                  {projectOptions.map((project) => (
+                    <option key={project} value={project}>{project}</option>
+                  ))}
+                </select>
+                <span aria-hidden="true" style={{ position: "absolute", right: 14, color: appUi.muted, fontSize: 11, pointerEvents: "none" }}>⌄</span>
+              </label>
             </div>
-          </section>
+          </header>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: 14 }}>
-            <MetricCard label="Recoverable value" value={loading ? "—" : money(metrics.totalValue)} hint="All saved CE totals." tone="default" />
-            <MetricCard label="Awaiting payment" value={loading ? "—" : money(metrics.unpaid)} hint="Submitted or accepted, not yet paid." tone={metrics.unpaid > 0 ? "amber" : "default"} />
-            <MetricCard label="Overdue recovery" value={loading ? "—" : money(metrics.overdue)} hint="Past due date." tone="red" />
-            <MetricCard label="Recovered" value={loading ? "—" : money(metrics.paid)} hint="Paid and completed." tone="green" />
-            <MetricCard label="Value not issued" value={loading ? "—" : money(metrics.notSubmitted)} hint="Draft, review or ready CEs." tone={metrics.notSubmitted > 0 ? "blue" : "default"} />
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 18, alignItems: "stretch" }}>
+            <DashboardTopCard
+              title="Commercial Recovery Position"
+              action={<StatusBadge tone={recoveryTrendChange.startsWith("↓") ? "red" : "green"}>{recoveryTrendChange}</StatusBadge>}
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 0.62fr) minmax(220px, 0.38fr)", gap: 18, alignItems: "center" }}>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ color: appUi.muted, fontSize: 13, fontWeight: 700 }}>Recoverable Value</div>
+                  <div style={{ color: appUi.text, fontSize: 46, lineHeight: 1, fontWeight: 900, letterSpacing: 0 }}>{loading ? "—" : money(metrics.totalValue)}</div>
+                  <div style={{ color: appUi.muted, fontSize: 13, lineHeight: 1.45 }}>Across {activeEnriched.length} live commercial {activeEnriched.length === 1 ? "event" : "events"}</div>
+                </div>
+                <MiniSparkline values={recoveryTrend} tone="green" height={98} />
+              </div>
+              <div style={{ height: 1, background: appUi.border }} />
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(100px, 1fr))", gap: 12 }}>
+                {[
+                  { label: "Awaiting Assessment", value: metrics.awaitingAssessment, tone: "blue" as const, icon: "clock" as const },
+                  { label: "Awaiting Payment", value: metrics.unpaid, tone: "orange" as const, icon: "money" as const },
+                  { label: "Overdue Recovery", value: metrics.overdue, tone: "red" as const, icon: "alert" as const },
+                  { label: "Recovered", value: metrics.paid, tone: "green" as const, icon: "check" as const },
+                  { label: "Potential Value Not Yet Submitted", value: metrics.notSubmitted, tone: "purple" as const, icon: "file" as const },
+                ].map((item) => {
+                  const tc = toneColours(item.tone);
+                  return (
+                    <div key={item.label} style={{ display: "grid", gap: 7, borderRight: `1px solid ${appUi.border}`, paddingRight: 8 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ color: appUi.muted, fontSize: 11, lineHeight: 1.25, fontWeight: 800 }}>{item.label}</span>
+                        <span style={{ width: 23, height: 23, borderRadius: 999, display: "grid", placeItems: "center", color: tc.text, background: tc.bg, flexShrink: 0 }}><SmallIcon name={item.icon} /></span>
+                      </div>
+                      <div style={{ color: appUi.text, fontSize: 18, lineHeight: 1.05, fontWeight: 850 }}>{loading ? "—" : money(Math.max(0, item.value))}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </DashboardTopCard>
+
+            <DashboardTopCard title="Commercial Radar" action={<Link href="/app/priorities" style={{ color: appUi.blue, textDecoration: "none", fontSize: 12, fontWeight: 800 }}>View all opportunities →</Link>}>
+              <div className="dashboard-radar-grid" style={{ display: "grid", gridTemplateColumns: "minmax(190px, 0.45fr) minmax(430px, 0.55fr)", gap: 22, alignItems: "center", minWidth: 0 }}>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ color: appUi.muted, fontSize: 13, fontWeight: 750 }}>Today&apos;s Opportunity</div>
+                  <div style={{ color: appUi.text, fontSize: 42, lineHeight: 1, fontWeight: 900 }}>{loading ? "—" : money(todayOpportunity)}</div>
+                  <div style={{ color: appUi.muted, fontSize: 13, lineHeight: 1.45 }}>that could move forward today</div>
+                </div>
+                <OpportunityRadar items={radarItems} />
+              </div>
+            </DashboardTopCard>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.55fr) minmax(420px, 0.85fr)", gap: 18, alignItems: "stretch" }}>
+            <DashboardTopCard title="Commercial Pipeline" action={<Link href="/app?register=1" style={{ color: appUi.blue, textDecoration: "none", fontSize: 12, fontWeight: 800 }}>View full register →</Link>}>
+              <div className="dashboard-pipeline-stages" style={{ display: "grid", gridTemplateColumns: `repeat(${dashboardStages.length}, minmax(0, 1fr))`, gap: 10, position: "relative" }}>
+                {dashboardStages.map((stage) => <PipelineStage key={stage.key} stage={stage} />)}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: dashboardStages.map((stage) => `${Math.max(1, stage.value || stage.count)}fr`).join(" "), height: 8, borderRadius: 999, overflow: "hidden", background: appUi.soft }}>
+                {dashboardStages.map((stage) => {
+                  const tc = toneColours(stage.tone);
+                  return <span key={stage.key} style={{ background: tc.text, minWidth: 10 }} />;
+                })}
+              </div>
+            </DashboardTopCard>
+
+            <DashboardTopCard title="Today's Priorities" action={<Link href="/app/priorities" style={{ color: appUi.blue, textDecoration: "none", fontSize: 12, fontWeight: 800 }}>View all →</Link>}>
+              <div style={{ display: "grid" }}>
+                {(actions.length ? actions.slice(0, 4) : []).map((action) => {
+                  const tone = action.tone === "amber" ? "orange" : action.tone === "neutral" ? "blue" : action.tone;
+                  const tc = toneColours(tone);
+                  return (
+                    <Link
+                      key={action.id}
+                      href={action.href}
+                      style={{
+                        textDecoration: "none",
+                        display: "grid",
+                        gridTemplateColumns: "34px minmax(0, 1fr) auto",
+                        gap: 10,
+                        alignItems: "center",
+                        padding: "12px 0",
+                        borderBottom: `1px solid ${appUi.border}`,
+                      }}
+                    >
+                      <span style={{ width: 28, height: 28, borderRadius: 8, display: "grid", placeItems: "center", background: tc.bg, color: tc.text }}><SmallIcon name={action.tone === "red" ? "alert" : action.tone === "amber" ? "calendar" : "file"} /></span>
+                      <span style={{ display: "grid", gap: 3, minWidth: 0 }}>
+                        <span style={{ color: appUi.text, fontSize: 12.5, lineHeight: 1.25, fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{action.eyebrow}</span>
+                        <span style={{ color: appUi.muted, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{action.title}</span>
+                      </span>
+                      <span style={{ color: tc.text, fontSize: 12.5, fontWeight: 850 }}>{action.value !== null ? money(action.value) : action.cta}</span>
+                    </Link>
+                  );
+                })}
+              {!actions.length ? <div style={{ color: appUi.muted, fontSize: 13, lineHeight: 1.5 }}>No live priorities yet. Create or submit a CE to start recovery tracking.</div> : null}
+              </div>
+            </DashboardTopCard>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.55fr) minmax(420px, 0.85fr)", gap: 18, alignItems: "stretch" }}>
+            <DashboardTopCard title="Recovery Insights" action={<span style={{ color: appUi.blue, fontSize: 12, fontWeight: 800 }}>View all reports →</span>}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(120px, 1fr))", gap: 12 }}>
+                {insightCards.map((card) => (
+                  <div key={card.label} style={{ border: `1px solid ${appUi.border}`, borderRadius: 14, padding: 12, background: appUi.surface, display: "grid", gap: 8 }}>
+                    <div style={{ color: appUi.muted, fontSize: 11, lineHeight: 1.25, fontWeight: 750 }}>{card.label}</div>
+                    <div style={{ color: appUi.text, fontSize: 16, lineHeight: 1.1, fontWeight: 850 }}>{card.value}</div>
+                    <MiniSparkline values={card.spark} tone={card.tone} height={48} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <span style={{ color: appUi.muted, fontSize: 11, letterSpacing: 0.8, textTransform: "uppercase", fontWeight: 850 }}>Commercial risk flags</span>
+                  <Link href="/app/priorities" style={{ color: appUi.blue, fontSize: 12, fontWeight: 800, textDecoration: "none" }}>Open priority board →</Link>
+                </div>
+                <div className="dashboard-risk-flags" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+                  {riskFlags.length ? riskFlags.map((flag) => (
+                    <RiskFlagTile key={flag.key} flag={flag} />
+                  )) : (
+                    <div style={{ gridColumn: "1 / -1", border: `1px dashed ${appUi.border}`, borderRadius: 14, padding: "16px 14px", color: appUi.muted, fontSize: 13, lineHeight: 1.45 }}>
+                      No material risk flags right now. New flags will appear here when a CE becomes overdue, rejected, short-paid, close to notice deadline or ready to issue.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </DashboardTopCard>
+
+            <DashboardTopCard title="Projects Overview" action={<Link href="/app/projects" style={{ color: appUi.blue, textDecoration: "none", fontSize: 12, fontWeight: 800 }}>View all →</Link>}>
+              <div style={{ display: "grid", gap: 10 }}>
+                {projectSummaries.length ? projectSummaries.map((project) => (
+                  <Link key={project.project} href={`/app/projects`} style={{ textDecoration: "none", border: `1px solid ${appUi.border}`, borderRadius: 14, padding: 13, display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center" }}>
+                    <span style={{ display: "grid", gap: 8, minWidth: 0 }}>
+                      <span style={{ color: appUi.text, fontSize: 13, fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{project.project}</span>
+                      <span style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+                        <span><b style={{ color: appUi.blue }}>{money(project.recoverable)}</b><small style={{ display: "block", color: appUi.muted }}>Recoverable</small></span>
+                        <span><b style={{ color: appUi.green }}>{money(project.recovered)}</b><small style={{ display: "block", color: appUi.muted }}>Recovered</small></span>
+                        <span><b style={{ color: appUi.orange }}>{money(project.outstanding)}</b><small style={{ display: "block", color: appUi.muted }}>Outstanding</small></span>
+                        <span><b style={{ color: project.overdue ? appUi.red : appUi.text }}>{project.overdue}</b><small style={{ display: "block", color: appUi.muted }}>Overdue</small></span>
+                      </span>
+                    </span>
+                    <RingProgress value={project.health} tone={project.overdue ? "orange" : "green"} label="Health" size={72} />
+                  </Link>
+                )) : <div style={{ color: appUi.muted, fontSize: 13 }}>Projects will appear once CEs are linked to a project.</div>}
+              </div>
+            </DashboardTopCard>
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ color: appUi.text, fontSize: 12, fontWeight: 850, textTransform: "uppercase", letterSpacing: 0.65 }}>Quick Access</div>
+            <div className="dashboard-quick-grid" style={{ display: "grid", gridTemplateColumns: "repeat(8, minmax(135px, 1fr))", gap: 12 }}>
+              <QuickAccessTile href="/app?register=1" label="All Events" hint="View and manage CEs" icon={<SmallIcon name="file" />} tone="blue" />
+              <QuickAccessTile href="/app/ewns" label="EWNs" hint="Early warning register" icon={<SmallIcon name="alert" />} tone="orange" />
+              <QuickAccessTile href="/app/projects" label="Projects" hint="View all projects" icon={<SmallIcon name="building" />} tone="purple" />
+              <QuickAccessTile href="/app?register=1" label="Evidence" hint="Upload and manage files" icon={<SmallIcon name="file" />} tone="green" />
+              <QuickAccessTile href="/app/rates" label="Rate Cards" hint="Manage rates" icon={<SmallIcon name="money" />} tone="purple" />
+              <QuickAccessTile href="/app?register=1" label="Submission Packs" hint="Generated packs" icon={<SmallIcon name="file" />} tone="blue" />
+              <QuickAccessTile href="/app/priorities" label="Commercial Pushback" hint="Review challenges" icon={<SmallIcon name="rocket" />} tone="red" />
+              <QuickAccessTile href="/app/priorities" label="Payment Tracking" hint="Track recovery status" icon={<SmallIcon name="calendar" />} tone="blue" />
+            </div>
           </div>
 
           <div
@@ -1647,25 +2451,85 @@ function AppHomeContent() {
                           const timeTone = row.timeRisk.state === "overdue" ? actionTone("red") : row.timeRisk.state === "due_soon" ? actionTone("amber") : actionTone("neutral");
                           const primaryAction = registerActionFor(row.event);
                           const isTrackingTarget = openTrackingId === row.event.id;
+                          const isExpanded = isTrackingTarget;
                           const voided = isVoided(row.event.status);
                           const paymentEditable = !voided && (isSubmittedOrAccepted(row.event.status) || isCommerciallyClosed(row.event.status, row.event.payment_status));
                           const rowBalance = balanceOutstanding(row.event, row.value);
+                          const paymentDisplayTone = isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status);
+                          const showNoticeBadge = !voided && !isSubmittedOrAccepted(row.event.status) && !isCommerciallyClosed(row.event.status, row.event.payment_status);
                           return (
                             <div
                               key={row.event.id}
                               ref={isTrackingTarget ? trackingTargetRef : null}
                               style={{
                                 border: `1px solid ${isTrackingTarget ? c.blueBd : c.border}`,
-                                borderRadius: 20,
-                                padding: 16,
+                                borderRadius: isExpanded ? 20 : 16,
+                                padding: isExpanded ? 16 : "10px 12px",
                                 background: voided ? c.soft : isTrackingTarget ? c.softBlue : c.card,
                                 display: "grid",
-                                gap: 14,
+                                gap: isExpanded ? 14 : 0,
                                 opacity: voided ? 0.68 : 1,
                                 boxShadow: isTrackingTarget ? "0 0 0 3px rgba(37,99,235,0.08)" : "none",
                                 transition: "background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease",
                               }}
                             >
+                      <button
+                        type="button"
+                        onClick={() => setOpenTrackingId(isExpanded ? null : row.event.id)}
+                        aria-expanded={isExpanded}
+                        style={{
+                          width: "100%",
+                          border: 0,
+                          background: "transparent",
+                          padding: 0,
+                          cursor: "pointer",
+                          display: "grid",
+                          gridTemplateColumns: "24px minmax(0, 1fr) auto",
+                          gap: 10,
+                          alignItems: "center",
+                          textAlign: "left",
+                        }}
+                      >
+                        <span
+                          aria-hidden
+                          style={{
+                            width: 24,
+                            height: 24,
+                            borderRadius: 999,
+                            display: "grid",
+                            placeItems: "center",
+                            border: `1px solid ${isExpanded ? c.blueBd : c.border}`,
+                            background: isExpanded ? c.blueBg : c.input,
+                            color: isExpanded ? c.blueTx : c.sub,
+                            fontSize: 12,
+                            fontWeight: 800,
+                            transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
+                            transition: "transform 160ms ease",
+                          }}
+                        >
+                          ▾
+                        </span>
+                        <span style={{ color: voided ? c.sub : c.text, fontSize: 14, lineHeight: 1.35, fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {displayEventTitle(row.event)}
+                        </span>
+                        <span style={{ display: "flex", gap: 7, alignItems: "center", justifyContent: "flex-end", minWidth: 0, whiteSpace: "nowrap" }}>
+                          <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${st.bd}`, background: st.bg, color: st.tx, fontSize: 11.5, lineHeight: 1, fontWeight: 700 }}>
+                            {getCommercialStatusLabel(row.event.status)}
+                          </span>
+                          {!voided ? (
+                            <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${paymentDisplayTone.bd}`, background: paymentDisplayTone.bg, color: paymentDisplayTone.tx, fontSize: 11.5, lineHeight: 1, fontWeight: 700 }}>
+                              {isOverdueCe(row.event) ? "Overdue" : getPaymentStatusLabel(row.event.payment_status)}
+                            </span>
+                          ) : null}
+                          {showNoticeBadge ? (
+                            <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${timeTone.bd}`, background: row.timeRisk.state === "safe" ? c.card : timeTone.bg, color: timeTone.tx, fontSize: 11.5, lineHeight: 1, fontWeight: 700 }}>
+                              {row.timeRisk.deadline ? row.timeRisk.label : "No event date"}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                      {isExpanded ? (
+                        <>
                       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 16, alignItems: "start" }}>
                         <div style={{ minWidth: 0 }}>
                           {renamingId === row.event.id ? (
@@ -2010,6 +2874,8 @@ function AppHomeContent() {
                           Tracking stays internal. It powers the dashboard and does not change the client-facing Excel narrative.
                         </div>
                       </details>
+                        </>
+                      ) : null}
                             </div>
                           );
                         })}
@@ -2021,76 +2887,6 @@ function AppHomeContent() {
             ) : null}
 
           </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(340px, 0.85fr)", gap: 18, alignItems: "start" }}>
-            <SectionCard title="Recovery actions" hint="Only items that can move value towards submission, acceptance or payment appear here. Notice deadlines are folded into the action text rather than split into a second dashboard card.">
-              {loading ? (
-                <div style={{ fontSize: 13, color: c.sub }}>Loading commercial actions…</div>
-              ) : actions.length === 0 ? (
-                <EmptyState />
-              ) : (
-                <div style={{ display: "grid", gap: 12 }}>
-                  {actions.map((action) => {
-                    const tone = actionTone(action.tone);
-                    const resourcesHref = `/app/event/${action.eventId}/resources`;
-                    const hasValue = action.value !== null;
-                    return (
-                      <div
-                        key={action.id}
-                        style={{
-                          border: `1px solid ${tone.bd}`,
-                          background: action.tone === "neutral" ? c.card : tone.bg,
-                          borderRadius: 20,
-                          padding: 16,
-                          display: "grid",
-                          gridTemplateColumns: "minmax(0, 1fr) auto",
-                          gap: 16,
-                          alignItems: "center",
-                        }}
-                      >
-                        <Link href={action.href} style={{ minWidth: 0, display: "grid", gap: 5, textDecoration: "none" }}>
-                          <div style={{ fontSize: 11, fontWeight: 650, color: tone.tx, textTransform: "uppercase", letterSpacing: 0.55 }}>{action.eyebrow}</div>
-                          <div style={{ fontSize: 15, fontWeight: 650, color: c.text, lineHeight: 1.25, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{action.title}</div>
-                          <div style={{ fontSize: 12.5, color: c.sub, lineHeight: 1.5 }}>{action.detail}</div>
-                        </Link>
-                        <div style={{ textAlign: "right", display: "grid", gap: 6, justifyItems: "end" }}>
-                          {hasValue ? (
-                            <div style={{ fontSize: 16, fontWeight: 650, color: c.text }}>{money(action.value ?? 0)}</div>
-                          ) : (
-                            <Link href={resourcesHref} style={{ fontSize: 16, fontWeight: 650, color: tone.tx, textDecoration: "none" }}>
-                              Add value →
-                            </Link>
-                          )}
-                          <Link href={action.href} style={{ fontSize: 12, fontWeight: 650, color: tone.tx, textDecoration: "none" }}>
-                            {action.cta}
-                          </Link>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </SectionCard>
-
-            <div style={{ display: "grid", gap: 14 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: 10 }}>
-                <CompactStatusCard label="Total CEs" value={loading ? "—" : totals.total} />
-                <CompactStatusCard label="Drafts" value={loading ? "—" : totals.drafts} tone="amber" />
-                <CompactStatusCard label="In review" value={loading ? "—" : totals.inReview} tone="blue" />
-                <CompactStatusCard label="Ready / complete" value={loading ? "—" : totals.ready} tone="green" />
-              </div>
-              <CurrentFocusPanel
-                focusAction={focusAction}
-                focusLoading={focusLoading}
-                focusProgress={focusProgress}
-                focusItems={focusItems}
-                nextFocusAction={nextFocusAction}
-                projectFilterLabel={projectFilterLabel}
-              />
-            </div>
-          </div>
-
-
         </div>
       </div>
     </div>

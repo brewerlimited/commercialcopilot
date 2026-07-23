@@ -7,6 +7,7 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
 import AccountMenu from "@/components/AccountMenu";
 import ForceGenerateToggle from "@/components/ForceGenerateToggle";
+import { FloatingOnboardingHelper } from "@/components/OnboardingActivation";
 import SessionManager from "@/components/SessionManager";
 import { broadcastSessionLogout } from "@/lib/session";
 
@@ -55,6 +56,8 @@ function Icon({
     | "plus"
     | "search"
     | "file"
+    | "ceRegister"
+    | "ewnRegister"
     | "logout"
     | "collapse"
     | "expand"
@@ -102,6 +105,24 @@ function Icon({
         <svg {...common}>
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
           <path d="M14 2v6h6" />
+        </svg>
+      );
+    case "ceRegister":
+      return (
+        <svg {...common}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
+          <path d="M8 13h8" />
+          <path d="M8 17h5" />
+        </svg>
+      );
+    case "ewnRegister":
+      return (
+        <svg {...common}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <path d="M14 2v6h6" />
+          <path d="M12 12v4" />
+          <path d="M12 19h.01" />
         </svg>
       );
     case "logout":
@@ -203,18 +224,21 @@ function Row({
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        minHeight: 42,
-        padding: "9px 11px",
-        borderRadius: 14,
+        justifyContent: collapsed ? "center" : "flex-start",
+        gap: collapsed ? 0 : 10,
+        width: collapsed ? 52 : "100%",
+        height: collapsed ? 52 : undefined,
+        minHeight: collapsed ? 52 : 42,
+        padding: collapsed ? 0 : "9px 11px",
+        borderRadius: collapsed ? 16 : 14,
         textDecoration: "none",
-        color: c.text,
+        color: active ? "#6d4aff" : c.text,
         background: active ? c.activeBg : "transparent",
         transition: "background 140ms ease, color 140ms ease, border-color 140ms ease",
-        border: `1px solid ${active ? c.border : "transparent"}`,
+        border: `1px solid ${active ? "#ddd4ff" : "transparent"}`,
       }}
     >
-      {icon ? <span style={{ width: 20, height: 20, display: "grid", placeItems: "center", color: c.sub, flex: "0 0 20px" }}>{icon}</span> : null}
+      {icon ? <span style={{ width: collapsed ? 24 : 20, height: collapsed ? 24 : 20, display: "grid", placeItems: "center", color: active ? "#6d4aff" : c.sub, flex: `0 0 ${collapsed ? 24 : 20}px` }}>{icon}</span> : null}
       {!collapsed && (
         <span
           style={{
@@ -239,6 +263,7 @@ function Row({
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [urlSearch, setUrlSearch] = useState("");
 
   const [events, setEvents] = useState<EventRow[]>([]);
   const [ewns, setEwns] = useState<EwnRow[]>([]);
@@ -254,6 +279,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       if (v === "1") setCollapsed(true);
     } catch {}
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setUrlSearch(window.location.search);
+  }, [pathname]);
 
   function toggleCollapsed() {
     setCollapsed((p) => {
@@ -353,6 +383,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [events, q]);
 
   const isAppHome = pathname === "/app";
+  const isCeRegister = pathname === "/app" && new URLSearchParams(urlSearch).get("register") === "1";
   const isNew = pathname === "/app/new";
   const isProjects = pathname?.startsWith("/app/projects") ?? false;
   const isNewEwn = pathname === "/app/ewns/new";
@@ -374,8 +405,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           top: 0,
           bottom: 0,
           width: sideW,
-          background: c.panel,
-          backdropFilter: "blur(10px)",
+          background: "#ffffff",
           borderRight: `1px solid ${c.border}`,
           padding: 10,
           zIndex: 30,
@@ -422,7 +452,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <Icon name="expand" />
               ) : (
                 <img
-                  src="/brand/ccp-mark-navy-transparent.png"
+                  src="/brand/ccp-mark-black-transparent.png"
                   alt=""
                   aria-hidden
                   style={{ width: 24, height: 24, objectFit: "contain", display: "block" }}
@@ -466,7 +496,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   }}
                 >
                   <img
-                    src="/brand/ccp-mark-navy-transparent.png"
+                    src="/brand/ccp-mark-black-transparent.png"
                     alt=""
                     aria-hidden
                     style={{ width: 21, height: 21, objectFit: "contain", display: "block" }}
@@ -509,11 +539,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         {/* Primary actions */}
         <div style={{ display: "grid", gap: 6 }}>
-          <Row href="/app" label="Dashboard" icon={<Icon name="home" />} active={isAppHome} collapsed={collapsed} />
+          <Row href="/app" label="Dashboard" icon={<Icon name="home" />} active={isAppHome && !isCeRegister} collapsed={collapsed} />
           <Row href="/app/projects" label="Projects" icon={<Icon name="projects" />} active={isProjects} collapsed={collapsed} />
           <Row href="/app/new" label="New CE" icon={<Icon name="plus" />} active={isNew} collapsed={collapsed} />
           <Row href="/app/ewns/new" label="New EWN" icon={<Icon name="warning" />} active={isNewEwn} collapsed={collapsed} />
-          <Row href="/app/ewns" label="EWN Register" icon={<Icon name="file" />} active={isEwns && !isNewEwn} collapsed={collapsed} />
+          <Row href="/app?register=1" label="CE Register" icon={<Icon name="ceRegister" />} active={isCeRegister} collapsed={collapsed} />
+          <Row href="/app/ewns" label="EWN Register" icon={<Icon name="ewnRegister" />} active={isEwns && !isNewEwn} collapsed={collapsed} />
           <Row
             href="/app/rates"
             label="Rate cards"
@@ -612,12 +643,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       padding: "10px 12px",
                       borderRadius: 16,
                       textDecoration: "none",
-                      color: c.text,
+                      color: active ? "#6d4aff" : c.text,
                       background: active ? c.activeBg : "transparent",
                       minWidth: 0,
                       maxWidth: "100%",
                       overflow: "hidden",
-                      border: `1px solid ${active ? c.border : "transparent"}`,
+                      border: `1px solid ${active ? "#ddd4ff" : "transparent"}`,
                       transition: "background 140ms ease, border-color 140ms ease",
                     }}
                     onMouseEnter={(ev) => {
@@ -643,9 +674,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                           {title}
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
-                          <span style={{ fontSize: 11, color: c.sub, fontWeight: 700 }}>{sub}</span>
+                          <span style={{ fontSize: 11, color: active ? "#6d4aff" : c.sub, fontWeight: 700 }}>{sub}</span>
                           {e.created_at ? (
-                            <span style={{ fontSize: 11, color: c.sub }}>
+                            <span style={{ fontSize: 11, color: active ? "#6d4aff" : c.sub }}>
                               {new Date(e.created_at).toLocaleDateString()}
                             </span>
                           ) : null}
@@ -668,7 +699,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <div style={{ color: c.sub, fontWeight: 700, padding: "6px 6px", fontSize: 12 }}>No EWNs logged.</div>
             ) : (
               ewns.slice(0, 5).map((e) => {
-                const active = pathname === `/app/ewns?ewn=${e.id}`;
+                const active = pathname === "/app/ewns" && new URLSearchParams(urlSearch).get("ewn") === e.id;
                 const title = e.title || "Untitled EWN";
                 const sub = e.status || "open";
                 return (
@@ -684,12 +715,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       padding: "10px 12px",
                       borderRadius: 16,
                       textDecoration: "none",
-                      color: c.text,
+                      color: active ? "#6d4aff" : c.text,
                       background: active ? c.activeBg : "transparent",
                       minWidth: 0,
                       maxWidth: "100%",
                       overflow: "hidden",
-                      border: `1px solid ${active ? c.border : "transparent"}`,
+                      border: `1px solid ${active ? "#ddd4ff" : "transparent"}`,
                       transition: "background 140ms ease, border-color 140ms ease",
                     }}
                     onMouseEnter={(ev) => {
@@ -704,7 +735,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                       <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: 1.1 }}>
                         {title}
                       </div>
-                      <div style={{ fontSize: 11, color: c.sub, fontWeight: 700, marginTop: 4 }}>{sub}</div>
+                      <div style={{ fontSize: 11, color: active ? "#6d4aff" : c.sub, fontWeight: 700, marginTop: 4 }}>{sub}</div>
                     </div>
                   </Link>
                 );
@@ -762,15 +793,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           style={{
             position: "sticky",
             top: 0,
-            background: c.topBg,
-            backdropFilter: "blur(10px)",
+            background: "#ffffff",
             borderBottom: `1px solid ${c.border}`,
             zIndex: 10,
           }}
         >
           <div
             style={{
-              maxWidth: 1240,
+              maxWidth: "none",
               margin: "0 auto",
               padding: "14px 16px",
               display: "flex",
@@ -780,8 +810,21 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               color: c.text,
             }}
           >
-            <div style={{ fontWeight: 700, letterSpacing: 0, color: c.black }}>
-              Commercial Co-Pilot
+            <div style={{ minWidth: 0 }}>
+              {isAppHome && !isCeRegister ? (
+                <>
+                  <div style={{ fontWeight: 800, letterSpacing: 0, color: c.black, fontSize: 18, lineHeight: 1.15 }}>
+                    Good morning, Jack
+                  </div>
+                  <div style={{ marginTop: 2, color: c.sub, fontSize: 12, fontWeight: 650, lineHeight: 1.25 }}>
+                    Here&apos;s your commercial recovery position.
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontWeight: 700, letterSpacing: 0, color: c.black }}>
+                  Commercial Co-Pilot
+                </div>
+              )}
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -803,15 +846,33 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               >
                 + New CE
               </Link>
+              <Link
+                href="/app/ewns/new"
+                style={{
+                  height: 48,
+                  padding: "0 16px",
+                  borderRadius: 16,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  border: `1px solid ${c.border}`,
+                  background: c.panelSolid,
+                  fontWeight: 700,
+                  color: c.text,
+                  textDecoration: "none",
+                }}
+              >
+                + New EWN
+              </Link>
               <AccountMenu />
             </div>
           </div>
         </header>
 
-        <section style={{ maxWidth: 1240, margin: "0 auto", padding: "18px 16px 56px" }}>
+        <section className="app-workspace" style={{ maxWidth: "none", margin: "0 auto", padding: "18px 24px 56px" }}>
           {children}
         </section>
       </div>
+      <FloatingOnboardingHelper />
     </main>
   );
 }

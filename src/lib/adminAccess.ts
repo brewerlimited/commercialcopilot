@@ -11,8 +11,10 @@ function parseConfiguredEmails(raw?: string | null) {
 
 export function getConfiguredAdminEmails() {
   const publicEmails = parseConfiguredEmails(process.env.NEXT_PUBLIC_ADMIN_EMAILS);
+  const publicEmail = parseConfiguredEmails(process.env.NEXT_PUBLIC_ADMIN_EMAIL);
   const serverEmails = parseConfiguredEmails(process.env.ADMIN_EMAILS);
-  return Array.from(new Set([...publicEmails, ...serverEmails]));
+  const serverEmail = parseConfiguredEmails(process.env.ADMIN_EMAIL);
+  return Array.from(new Set([...publicEmails, ...publicEmail, ...serverEmails, ...serverEmail]));
 }
 
 export function matchesConfiguredAdminEmail(email?: string | null) {
