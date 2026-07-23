@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase/client";
 import { getRequiredUser, isAuthErrorMessage } from "@/lib/security";
+import { isAccountApproved, isSubscriptionActive, normaliseAccountAccessStatus } from "@/lib/billing";
 import AccountMenu from "@/components/AccountMenu";
 import ForceGenerateToggle from "@/components/ForceGenerateToggle";
 import { FloatingOnboardingHelper } from "@/components/OnboardingActivation";
@@ -31,6 +32,7 @@ type EventRow = {
   title: string;
   status: string | null;
   created_at?: string;
+  is_demo?: boolean | null;
 };
 
 type EwnRow = {
@@ -38,6 +40,16 @@ type EwnRow = {
   title: string;
   status: string | null;
   created_at?: string;
+  is_demo?: boolean | null;
+};
+
+type AccessGateState = {
+  loaded: boolean;
+  allowed: boolean;
+  requested: boolean;
+  email: string | null;
+  accountStatus: string | null;
+  error: string | null;
 };
 
 function errorMessage(error: unknown) {
@@ -46,6 +58,23 @@ function errorMessage(error: unknown) {
 
 function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+function isOptionalSchemaError(error: any) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("could not find") ||
+    message.includes("column") ||
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    error?.code === "PGRST204"
+  );
+}
+
+function demoFilteredRows<T extends { is_demo?: boolean | null }>(rows: T[], demoMode: boolean) {
+  return demoMode ? rows.filter((row) => row.is_demo === true) : rows.filter((row) => row.is_demo !== true);
 }
 
 function Icon({
@@ -261,6 +290,256 @@ function Row({
   );
 }
 
+function EarlyAccessScreen({
+  email,
+  requested,
+  accountStatus,
+  requestNote,
+  requestBusy,
+  requestMessage,
+  requestError,
+  onRequestNoteChange,
+  onRequestAccess,
+}: {
+  email: string | null;
+  requested: boolean;
+  accountStatus: string | null;
+  requestNote: string;
+  requestBusy: boolean;
+  requestMessage: string | null;
+  requestError: string | null;
+  onRequestNoteChange: (value: string) => void;
+  onRequestAccess: () => void;
+}) {
+  const statusText = accountStatus === "suspended" ? "Account suspended" : requested ? "Request received" : "Pending verification";
+
+  return (
+    <section
+      style={{
+        maxWidth: 1480,
+        margin: "0 auto",
+        padding: "42px 20px",
+        minHeight: "calc(100vh - 126px)",
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) minmax(360px, 520px)",
+        gap: 24,
+        alignItems: "stretch",
+      }}
+    >
+        <div
+          style={{
+            border: "1px solid #e5e7ef",
+            borderRadius: 30,
+            background: "#ffffff",
+            padding: 38,
+            boxShadow: "0 18px 55px rgba(15,23,42,0.06)",
+            display: "grid",
+            alignContent: "center",
+            gap: 24,
+          }}
+        >
+          <span
+            style={{
+              width: "fit-content",
+              border: "1px solid #ddd4ff",
+              background: "#f3efff",
+              color: "#6d4aff",
+              borderRadius: 999,
+              padding: "8px 13px",
+              fontSize: 12,
+              fontWeight: 850,
+            }}
+          >
+            {statusText}
+          </span>
+          <div style={{ display: "grid", gap: 14 }}>
+            <h1 style={{ margin: 0, fontSize: 54, lineHeight: 1.02, letterSpacing: 0, fontWeight: 900 }}>
+              Welcome to Commercial Co-Pilot.
+            </h1>
+            <p style={{ margin: 0, color: "#596579", fontSize: 18, lineHeight: 1.6, maxWidth: 720 }}>
+              Commercial Co-Pilot is currently in an early access trial. During this period, only verified users can use the full site.
+            </p>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+            {[
+              ["Recoverable value", "Track CEs / VOs through to payment.", "#eff6ff", "#bfdbfe", "#2563eb"],
+              ["Evidence-led packs", "Keep records, cost and entitlement joined up.", "#ecfdf5", "#bbf7d0", "#067647"],
+              ["Early access", "Verified testers get the full workspace.", "#fff7ed", "#fed7aa", "#c24f0c"],
+            ].map(([title, body, bg, border, tone]) => (
+              <div key={title} style={{ border: `1px solid ${border}`, background: bg, borderRadius: 18, padding: 18, minHeight: 132 }}>
+                <div style={{ color: tone, fontWeight: 850, fontSize: 14 }}>{title}</div>
+                <div style={{ marginTop: 18, color: "#596579", fontSize: 13, lineHeight: 1.45, fontWeight: 650 }}>{body}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            border: "1px solid #e5e7ef",
+            borderRadius: 30,
+            background: "#ffffff",
+            padding: 30,
+            boxShadow: "0 18px 55px rgba(15,23,42,0.06)",
+            display: "grid",
+            alignContent: "start",
+            gap: 18,
+          }}
+        >
+          <div style={{ display: "grid", gap: 8 }}>
+            <h2 style={{ margin: 0, fontSize: 26, lineHeight: 1.1, fontWeight: 900 }}>Request access</h2>
+            <p style={{ margin: 0, color: "#596579", fontSize: 14, lineHeight: 1.5 }}>
+              Tell us who you are and what you want to test. We will activate verified trial users manually.
+            </p>
+          </div>
+
+          <div style={{ border: "1px solid #e5e7ef", borderRadius: 18, padding: 16, background: "#f8fafc" }}>
+            <div style={{ color: "#596579", fontSize: 12, fontWeight: 850, textTransform: "uppercase", letterSpacing: 0.5 }}>Signed in as</div>
+            <div style={{ marginTop: 6, fontWeight: 850, overflowWrap: "anywhere" }}>{email || "Unknown account"}</div>
+          </div>
+
+          <label style={{ display: "grid", gap: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 850, color: "#475569" }}>Company, role and intended test use</span>
+            <textarea
+              value={requestNote}
+              onChange={(e) => onRequestNoteChange(e.target.value)}
+              placeholder="e.g. subcontractor QS testing CE / VO recovery workflow on NEC projects"
+              rows={6}
+              disabled={requestBusy || requested}
+              style={{
+                width: "100%",
+                resize: "vertical",
+                minHeight: 138,
+                padding: 14,
+                borderRadius: 16,
+                border: "1px solid #e5e7ef",
+                outline: "none",
+                background: requested ? "#f8fafc" : "#ffffff",
+                color: "#0f172a",
+                fontSize: 14,
+                lineHeight: 1.5,
+                fontWeight: 650,
+              }}
+            />
+          </label>
+
+          {requestMessage ? (
+            <div style={{ border: "1px solid #bbf7d0", background: "#ecfdf5", color: "#067647", padding: 13, borderRadius: 16, fontWeight: 800, fontSize: 13 }}>
+              {requestMessage}
+            </div>
+          ) : null}
+
+          {requestError ? (
+            <div style={{ border: "1px solid #fecaca", background: "#fef2f2", color: "#b91c1c", padding: 13, borderRadius: 16, fontWeight: 800, fontSize: 13 }}>
+              {requestError}
+            </div>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={onRequestAccess}
+            disabled={requestBusy || requested}
+            style={{
+              minHeight: 54,
+              borderRadius: 16,
+              border: `1px solid ${requestBusy || requested ? "#ddd4ff" : "#6d4aff"}`,
+              background: requestBusy || requested ? "#f3efff" : "#6d4aff",
+              color: requestBusy || requested ? "#6d4aff" : "#ffffff",
+              fontWeight: 900,
+              cursor: requestBusy || requested ? "not-allowed" : "pointer",
+              boxShadow: requestBusy || requested ? "none" : "0 16px 30px rgba(109,74,255,0.20)",
+            }}
+          >
+            {requestBusy ? "Sending request…" : requested ? "Access request received" : "Request access"}
+          </button>
+        </div>
+    </section>
+  );
+}
+
+function DemoReadOnlyBanner({ onExitDemo }: { onExitDemo: () => void }) {
+  return (
+    <div
+      style={{
+        marginBottom: 16,
+        border: "1px solid #ddd4ff",
+        background: "#f5f0ff",
+        borderRadius: 18,
+        padding: "14px 16px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 14,
+        color: "#4f35c6",
+        boxShadow: "0 14px 34px rgba(109,74,255,0.08)",
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 900, color: "#6d4aff" }}>Demo data only</div>
+        <div style={{ marginTop: 3, color: "#5f547f", fontWeight: 700, lineHeight: 1.35 }}>
+          You are exploring the normal app with seeded demo records. Creation and saving are disabled, and pack generation downloads a sample workbook.
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onExitDemo}
+        style={{
+          flex: "0 0 auto",
+          height: 40,
+          padding: "0 14px",
+          borderRadius: 14,
+          border: "1px solid #cfc2ff",
+          background: "#ffffff",
+          color: "#6d4aff",
+          fontWeight: 900,
+          cursor: "pointer",
+        }}
+      >
+        Exit demo
+      </button>
+    </div>
+  );
+}
+
+function DemoCreateBlocked() {
+  return (
+    <div
+      style={{
+        border: `1px solid ${c.border}`,
+        background: "#ffffff",
+        borderRadius: 24,
+        padding: 28,
+        boxShadow: "0 18px 55px rgba(15,23,42,0.06)",
+        color: c.text,
+      }}
+    >
+      <div style={{ fontSize: 24, lineHeight: 1.15, fontWeight: 950, letterSpacing: 0 }}>Creation is disabled in demo mode</div>
+      <p style={{ margin: "10px 0 0", color: c.sub, fontSize: 16, lineHeight: 1.55, fontWeight: 650 }}>
+        Demo mode lets trial users explore the real workflow with seeded data, but it does not create or save new CEs, EWNs or projects.
+      </p>
+      <Link
+        href="/app"
+        style={{
+          marginTop: 18,
+          height: 44,
+          padding: "0 16px",
+          borderRadius: 14,
+          display: "inline-flex",
+          alignItems: "center",
+          background: "#f3efff",
+          border: "1px solid #ddd4ff",
+          color: "#6d4aff",
+          textDecoration: "none",
+          fontWeight: 900,
+        }}
+      >
+        Back to demo dashboard
+      </Link>
+    </div>
+  );
+}
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [urlSearch, setUrlSearch] = useState("");
@@ -272,13 +551,50 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const [logoHover, setLogoHover] = useState(false);
+  const [accessGate, setAccessGate] = useState<AccessGateState>({
+    loaded: false,
+    allowed: false,
+    requested: false,
+    email: null,
+    accountStatus: null,
+    error: null,
+  });
+  const [requestNote, setRequestNote] = useState("");
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestMessage, setRequestMessage] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoCountdown, setDemoCountdown] = useState(10);
+  const [demoSeedStatus, setDemoSeedStatus] = useState<"idle" | "seeding" | "ready" | "error">("idle");
+  const [demoSeedMessage, setDemoSeedMessage] = useState<string | null>(null);
 
   useEffect(() => {
     try {
       const v = localStorage.getItem("cc.sidebar.collapsed");
       if (v === "1") setCollapsed(true);
+      const demo = localStorage.getItem("cc.demo.mode");
+      if (demo === "1") {
+        setDemoMode(true);
+        setDemoLoading(false);
+      }
     } catch {}
   }, []);
+
+  useEffect(() => {
+    if (!demoLoading) return;
+
+    if (demoCountdown <= 0) {
+      setDemoLoading(false);
+      return;
+    }
+
+    const t = window.setTimeout(() => {
+      setDemoCountdown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+
+    return () => window.clearTimeout(t);
+  }, [demoCountdown, demoLoading]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -293,6 +609,68 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       } catch {}
       return next;
     });
+  }
+
+  async function enableDemoMode() {
+    if (demoLoading) return;
+
+    setDemoSeedStatus("seeding");
+    setDemoSeedMessage(null);
+    setDemoLoading(true);
+    setDemoCountdown(10);
+
+    try {
+      const supabase = supabaseBrowser();
+      const sessionRes = await supabase.auth.getSession();
+      const token = sessionRes.data.session?.access_token;
+      const email = sessionRes.data.session?.user?.email || accessGate.email;
+
+      if (!token) {
+        throw new Error("Your session has expired. Please sign in again before loading demo mode.");
+      }
+
+      const res = await fetch("/api/admin/seed-demo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ targetEmail: email, demoMode: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data?.error || "Demo seed failed. Please try again.");
+      }
+
+      const eventsLoaded = Number(data?.eventsCreated ?? data?.inserted?.events ?? data?.counts?.events ?? 0);
+      const ewnsLoaded = Number(data?.ewnsCreated ?? data?.inserted?.ewns ?? data?.counts?.ewns ?? 0);
+      setDemoSeedStatus("ready");
+      setDemoSeedMessage(`Demo workspace ready: ${eventsLoaded} CEs and ${ewnsLoaded} EWNs loaded.`);
+      setDemoMode(true);
+      try {
+        localStorage.setItem("cc.demo.mode", "1");
+        window.dispatchEvent(new Event("cc:demo-mode-changed"));
+      } catch {}
+    } catch (error) {
+      setDemoSeedStatus("error");
+      setDemoSeedMessage(error instanceof Error ? error.message : "Demo seed failed. Please try again.");
+      setDemoLoading(false);
+      setDemoCountdown(10);
+      return;
+    }
+  }
+
+  function disableDemoMode() {
+    setDemoMode(false);
+    setDemoLoading(false);
+    setDemoCountdown(10);
+    setDemoSeedStatus("idle");
+    setDemoSeedMessage(null);
+    try {
+      localStorage.removeItem("cc.demo.mode");
+      window.dispatchEvent(new Event("cc:demo-mode-changed"));
+    } catch {}
   }
 
   function readLocalEwns(): EwnRow[] {
@@ -316,26 +694,153 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     const supabase = supabaseBrowser();
     let active = true;
 
+    async function loadAccess() {
+      try {
+        const user = await getRequiredUser(supabase);
+        const { data, error } = await (supabase as any).from("profiles")
+          .select("account_status,subscription_status,is_admin_unlimited,early_access_requested_at,early_access_request_status")
+          .eq("id", user.id)
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!active) return;
+
+        const accountStatus = normaliseAccountAccessStatus(data?.account_status);
+        const allowed =
+          Boolean(data?.is_admin_unlimited) ||
+          isAccountApproved(accountStatus) ||
+          isSubscriptionActive(data?.subscription_status);
+
+        setAccessGate({
+          loaded: true,
+          allowed,
+          requested: Boolean(data?.early_access_requested_at) || data?.early_access_request_status === "requested",
+          email: user.email ?? null,
+          accountStatus,
+          error: null,
+        });
+      } catch (e: unknown) {
+        if (isAuthErrorMessage(errorMessage(e))) {
+          window.location.href = "/login";
+          return;
+        }
+        console.error("Failed to check account access", e);
+        if (active) {
+          setAccessGate({
+            loaded: true,
+            allowed: false,
+            requested: false,
+            email: null,
+            accountStatus: null,
+            error: "We could not verify this account. Please request access or try again shortly.",
+          });
+        }
+      }
+    }
+
+    void loadAccess();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        window.location.href = "/login";
+        return;
+      }
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        void loadAccess();
+      }
+    });
+
+    return () => {
+      active = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  async function requestAccess() {
+    setRequestBusy(true);
+    setRequestMessage(null);
+    setRequestError(null);
+
+    try {
+      const supabase = supabaseBrowser();
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Please sign in again before requesting access.");
+
+      const res = await fetch("/api/request-access", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ note: requestNote }),
+      });
+
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.error || "Access request failed.");
+
+      if (payload?.alreadyActive) {
+        setAccessGate((prev) => ({ ...prev, loaded: true, allowed: true, requested: true }));
+        setRequestMessage("Your account is already active. Loading the app now.");
+        window.location.reload();
+        return;
+      }
+
+      setAccessGate((prev) => ({ ...prev, requested: true }));
+      setRequestMessage("Access request received. We will review it and activate verified trial users manually.");
+    } catch (e: unknown) {
+      setRequestError(e instanceof Error ? e.message : "Access request failed.");
+    } finally {
+      setRequestBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!accessGate.loaded || !accessGate.allowed) {
+      setEvents([]);
+      setEwns([]);
+      setLoadingEvents(false);
+      return;
+    }
+
+    const supabase = supabaseBrowser();
+    let active = true;
+
     async function loadEvents() {
       setLoadingEvents(true);
 
       try {
         const user = await getRequiredUser(supabase);
-        const { data: eventsData, error } = await (supabase as any).from("events")
-          .select("id,title,status,created_at")
+        let eventsResult = await (supabase as any).from("events")
+          .select("id,title,status,created_at,is_demo")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
 
-        if (error) throw error;
+        if (eventsResult.error && isOptionalSchemaError(eventsResult.error)) {
+          eventsResult = await (supabase as any).from("events")
+            .select("id,title,status,created_at")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false });
+        }
 
-        const { data: ewnsData, error: ewnsError } = await (supabase as any).from("ewns")
-          .select("id,title,status,created_at")
+        if (eventsResult.error) throw eventsResult.error;
+
+        let ewnsResult = await (supabase as any).from("ewns")
+          .select("id,title,status,created_at,is_demo")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
+
+        if (ewnsResult.error && isOptionalSchemaError(ewnsResult.error)) {
+          ewnsResult = await (supabase as any).from("ewns")
+            .select("id,title,status,created_at")
+            .eq("user_id", user.id)
+            .order("created_at", { ascending: false });
+        }
 
         if (!active) return;
-        setEvents((eventsData ?? []) as EventRow[]);
-        setEwns(ewnsError ? readLocalEwns() : ([...((ewnsData ?? []) as EwnRow[]), ...readLocalEwns()]));
+        setEvents(demoFilteredRows((eventsResult.data ?? []) as EventRow[], demoMode));
+        const localEwns = demoMode ? [] : readLocalEwns();
+        setEwns(ewnsResult.error ? localEwns : [...demoFilteredRows((ewnsResult.data ?? []) as EwnRow[], demoMode), ...localEwns]);
       } catch (e: unknown) {
         if (isAuthErrorMessage(errorMessage(e))) {
           window.location.href = "/login";
@@ -367,7 +872,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       active = false;
       authListener.subscription.unsubscribe();
     };
-  }, []);
+  }, [accessGate.loaded, accessGate.allowed, demoMode]);
 
   const activeEventId = useMemo(() => {
     const m = pathname?.match(/\/app\/event\/([^\/]+)/);
@@ -393,6 +898,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const isCompanyProfile = pathname?.startsWith("/app/company-profile") ?? false;
 
   const sideW = collapsed ? 72 : 280;
+
+  if (!accessGate.loaded) {
+    return (
+      <main style={{ minHeight: "100vh", background: c.bg, color: c.text, display: "grid", placeItems: "center", padding: 24 }}>
+        <SessionManager />
+        <div style={{ border: `1px solid ${c.border}`, background: "#ffffff", borderRadius: 24, padding: 28, boxShadow: "0 18px 55px rgba(15,23,42,0.06)" }}>
+          <div style={{ fontWeight: 900, fontSize: 20 }}>Checking account access…</div>
+          <div style={{ marginTop: 8, color: c.sub, fontWeight: 650 }}>This only takes a moment.</div>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main style={{ minHeight: "100vh", background: c.bg, color: c.text }}>
@@ -541,8 +1058,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <div style={{ display: "grid", gap: 6 }}>
           <Row href="/app" label="Dashboard" icon={<Icon name="home" />} active={isAppHome && !isCeRegister} collapsed={collapsed} />
           <Row href="/app/projects" label="Projects" icon={<Icon name="projects" />} active={isProjects} collapsed={collapsed} />
-          <Row href="/app/new" label="New CE" icon={<Icon name="plus" />} active={isNew} collapsed={collapsed} />
-          <Row href="/app/ewns/new" label="New EWN" icon={<Icon name="warning" />} active={isNewEwn} collapsed={collapsed} />
+          <Row href={demoMode ? "/app" : "/app/new"} label="New CE" icon={<Icon name="plus" />} active={isNew} collapsed={collapsed} />
+          <Row href={demoMode ? "/app" : "/app/ewns/new"} label="New EWN" icon={<Icon name="warning" />} active={isNewEwn} collapsed={collapsed} />
           <Row href="/app?register=1" label="CE Register" icon={<Icon name="ceRegister" />} active={isCeRegister} collapsed={collapsed} />
           <Row href="/app/ewns" label="EWN Register" icon={<Icon name="ewnRegister" />} active={isEwns && !isNewEwn} collapsed={collapsed} />
           <Row
@@ -828,51 +1345,216 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <ForceGenerateToggle />
-              <Link
-                href="/app/new"
-                style={{
-                  height: 48,
-                  padding: "0 16px",
-                  borderRadius: 16,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  border: `1px solid ${c.black}`,
-                  background: c.black,
-                  fontWeight: 700,
-                  color: c.blackContrast,
-                  textDecoration: "none",
-                }}
-              >
-                + New CE
-              </Link>
-              <Link
-                href="/app/ewns/new"
-                style={{
-                  height: 48,
-                  padding: "0 16px",
-                  borderRadius: 16,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  border: `1px solid ${c.border}`,
-                  background: c.panelSolid,
-                  fontWeight: 700,
-                  color: c.text,
-                  textDecoration: "none",
-                }}
-              >
-                + New EWN
-              </Link>
+              {accessGate.allowed ? (
+                <>
+                  <ForceGenerateToggle />
+                  <button
+                    type="button"
+                    onClick={demoMode ? disableDemoMode : enableDemoMode}
+                    aria-pressed={demoMode}
+                    disabled={demoLoading}
+                    style={{
+                      height: 48,
+                      padding: "0 14px",
+                      borderRadius: 16,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 10,
+                      border: demoMode ? "1px solid #d8c8ff" : `1px solid ${c.border}`,
+                      background: demoMode ? "#f5f0ff" : c.panelSolid,
+                      color: demoMode ? "#6d4aff" : c.text,
+                      fontWeight: 800,
+                      cursor: demoLoading ? "wait" : "pointer",
+                      opacity: demoLoading ? 0.72 : 1,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 9,
+                        height: 9,
+                        borderRadius: 99,
+                        background: demoMode ? "#6d4aff" : "#94a3b8",
+                        boxShadow: demoMode ? "0 0 0 5px rgba(109, 74, 255, 0.12)" : "none",
+                      }}
+                    />
+                    {demoLoading ? "Loading demo" : demoMode ? "Demo on" : "Demo"}
+                  </button>
+                  <Link
+                    href={demoMode ? "/app" : "/app/new"}
+                    aria-disabled={demoMode}
+                    title={demoMode ? "Creation is disabled in demo mode" : undefined}
+                    style={{
+                      height: 48,
+                      padding: "0 16px",
+                      borderRadius: 16,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      border: demoMode ? `1px solid ${c.border}` : `1px solid ${c.black}`,
+                      background: demoMode ? "#f3f4f6" : c.black,
+                      fontWeight: 700,
+                      color: demoMode ? c.sub : c.blackContrast,
+                      textDecoration: "none",
+                      cursor: demoMode ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    + New CE
+                  </Link>
+                  <Link
+                    href={demoMode ? "/app" : "/app/ewns/new"}
+                    aria-disabled={demoMode}
+                    title={demoMode ? "Creation is disabled in demo mode" : undefined}
+                    style={{
+                      height: 48,
+                      padding: "0 16px",
+                      borderRadius: 16,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      border: `1px solid ${c.border}`,
+                      background: demoMode ? "#f3f4f6" : c.panelSolid,
+                      fontWeight: 700,
+                      color: demoMode ? c.sub : c.text,
+                      textDecoration: "none",
+                      cursor: demoMode ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    + New EWN
+                  </Link>
+                </>
+              ) : (
+                <span
+                  style={{
+                    height: 44,
+                    padding: "0 14px",
+                    borderRadius: 999,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    border: "1px solid #ddd4ff",
+                    background: "#f3efff",
+                    color: "#6d4aff",
+                    fontWeight: 850,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Early access pending
+                </span>
+              )}
               <AccountMenu />
             </div>
           </div>
         </header>
 
         <section className="app-workspace" style={{ maxWidth: "none", margin: "0 auto", padding: "18px 24px 56px" }}>
-          {children}
+          {demoSeedStatus === "error" && demoSeedMessage ? (
+            <div
+              role="alert"
+              style={{
+                margin: "0 0 14px",
+                borderRadius: 16,
+                border: "1px solid #fecaca",
+                background: "#fff1f2",
+                color: "#991b1b",
+                padding: "14px 16px",
+                fontWeight: 800,
+              }}
+            >
+              {demoSeedMessage}
+            </div>
+          ) : null}
+          {demoMode ? <DemoReadOnlyBanner onExitDemo={disableDemoMode} /> : null}
+          {accessGate.allowed ? (
+            demoMode && (isNew || isNewEwn) ? <DemoCreateBlocked /> : children
+          ) : (
+            <EarlyAccessScreen
+              email={accessGate.email}
+              requested={accessGate.requested}
+              accountStatus={accessGate.accountStatus}
+              requestNote={requestNote}
+              requestBusy={requestBusy}
+              requestMessage={requestMessage}
+              requestError={requestError || accessGate.error}
+              onRequestNoteChange={setRequestNote}
+              onRequestAccess={requestAccess}
+            />
+          )}
         </section>
       </div>
-      <FloatingOnboardingHelper />
+      {!demoMode ? <FloatingOnboardingHelper /> : null}
+      {demoLoading && (demoMode || demoSeedStatus === "seeding" || demoSeedStatus === "ready") ? (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            display: "grid",
+            placeItems: "center",
+            background: "rgba(15, 23, 42, 0.28)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <div
+            style={{
+              width: "min(520px, calc(100vw - 40px))",
+              borderRadius: 24,
+              border: "1px solid #e5e7eb",
+              background: "#ffffff",
+              padding: 28,
+              boxShadow: "0 30px 80px rgba(15, 23, 42, 0.18)",
+              color: c.text,
+              textAlign: "center",
+            }}
+          >
+            <div
+              style={{
+                margin: "0 auto 18px",
+                width: 56,
+                height: 56,
+                borderRadius: 18,
+                display: "grid",
+                placeItems: "center",
+                background: "#f5f0ff",
+                color: "#6d4aff",
+                fontSize: 26,
+                fontWeight: 900,
+              }}
+            >
+              {demoCountdown}
+            </div>
+            <h2 style={{ margin: 0, color: c.black, fontSize: 28, lineHeight: 1.1, letterSpacing: 0 }}>
+              {demoSeedStatus === "ready" ? "Demo data ready" : "Populating demo data"}
+            </h2>
+            <p style={{ margin: "12px 0 0", color: c.sub, fontSize: 16, lineHeight: 1.55, fontWeight: 650 }}>
+              {demoSeedMessage ||
+                "Building a sample recovery workspace with demo CEs, EWNs, project values and payment actions. Demo edits are temporary and pack generation downloads a pre-generated CE, so no credits are used."}
+            </p>
+            <div
+              style={{
+                marginTop: 22,
+                height: 8,
+                borderRadius: 999,
+                background: "#eef2f7",
+                overflow: "hidden",
+              }}
+            >
+              <span
+                style={{
+                  display: "block",
+                  height: "100%",
+                  width: `${((10 - demoCountdown) / 10) * 100}%`,
+                  background: "linear-gradient(90deg, #6d4aff, #17a673)",
+                  transition: "width 250ms ease",
+                }}
+              />
+            </div>
+            <p style={{ margin: "14px 0 0", color: c.sub, fontWeight: 800 }}>
+              {demoCountdown} seconds remaining
+            </p>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

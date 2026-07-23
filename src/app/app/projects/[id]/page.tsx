@@ -33,6 +33,7 @@ type ProjectRow = {
   project_manager?: string | null;
   quantity_surveyor?: string | null;
   notes?: string | null;
+  is_demo?: boolean | null;
 };
 
 type EventRow = {
@@ -61,6 +62,7 @@ type EventRow = {
   last_action_date?: string | null;
   event_financial_summary?: unknown;
   created_at?: string | null;
+  is_demo?: boolean | null;
 };
 
 type TrackingUpdate = Partial<Pick<EventRow,
@@ -89,6 +91,7 @@ type EwnRow = {
   event_date?: string | null;
   impact?: string | null;
   converted_event_id?: string | null;
+  is_demo?: boolean | null;
 };
 
 const PROJECT_STATUS_OPTIONS = [
@@ -116,9 +119,13 @@ const c = {
   greenBg: "var(--green-bg)",
   greenBd: "var(--green-border)",
   greenTx: "var(--green-text)",
+  amberBg: "var(--amber-bg)",
+  amberBd: "var(--amber-border)",
+  amberTx: "var(--amber-text)",
   blueBg: "var(--blue-bg)",
   blueBd: "var(--blue-border)",
   blueTx: "var(--blue-text)",
+  purple: "var(--purple, #6d4aff)",
 };
 
 function money(v: number) {
@@ -242,10 +249,70 @@ function isOverdue(event: EventRow) {
   return today.getTime() > due.getTime();
 }
 
+function paymentTrackingHref(eventId: string) {
+  return `/app?register=1&trackPayment=${encodeURIComponent(eventId)}`;
+}
+
+function isClosed(event: EventRow) {
+  return normaliseCommercialStatus(event.status) === "paid" || normalisePaymentStatus(event.payment_status) === "paid";
+}
+
+function projectEventAction(event: EventRow) {
+  const status = normaliseCommercialStatus(event.status);
+  if (status === "void" || isClosed(event)) return { label: "View record", href: `/app/event/${event.id}/review` };
+  if (status === "rejected") return { label: "Open rebuttal", href: `/app/event/${event.id}/review?mode=rebuttal` };
+  if (status === "submitted" || status === "accepted") return { label: "Tracker open", href: "" };
+  return { label: "Open CE", href: `/app/event/${event.id}` };
+}
+
+function projectRecoveryControl(event: EventRow) {
+  const status = normaliseCommercialStatus(event.status);
+  if (status === "void") {
+    return {
+      tone: "green" as AppTone,
+      label: "Audit record",
+      detail: "This CE / VO is void and kept for audit only. It is excluded from live recovery totals.",
+    };
+  }
+  if (isClosed(event)) {
+    return {
+      tone: "green" as AppTone,
+      label: "Recovery closed",
+      detail: "Paid and commercially closed. Keep the record for audit, but no recovery action is needed.",
+    };
+  }
+  if (status === "rejected") {
+    return {
+      tone: "red" as AppTone,
+      label: "Rebuttal required",
+      detail: "Prepare the rebuttal position and address the reason the CE / VO has been rejected or discounted.",
+    };
+  }
+  if (isOverdue(event)) {
+    return {
+      tone: "red" as AppTone,
+      label: "Payment overdue",
+      detail: "The expected payment date has passed. Chase the outstanding value and record the response.",
+    };
+  }
+  if (status === "submitted" || status === "accepted") {
+    return {
+      tone: "blue" as AppTone,
+      label: "Payment follow-up",
+      detail: "Submitted or accepted value is still unpaid. Keep follow-up dates and the client response current.",
+    };
+  }
+  return {
+    tone: "purple" as AppTone,
+    label: "Recovery control",
+    detail: "Track assessment, chase dates, short payment and recovery action without changing the client-facing narrative.",
+  };
+}
+
 function nextAction(events: EventRow[], ewns: EwnRow[]) {
   const activeEvents = events.filter((event) => !isVoided(event));
   const overdue = activeEvents.filter(isOverdue).sort((a, b) => outstandingValue(b) - outstandingValue(a))[0];
-  if (overdue) return { label: "Chase payment", detail: `${displayEventReference(overdue)} is overdue. Outstanding ${money(outstandingValue(overdue))}.`, href: `/app?trackPayment=${overdue.id}`, tone: "red" as const };
+  if (overdue) return { label: "Chase payment", detail: `${displayEventReference(overdue)} is overdue. Outstanding ${money(outstandingValue(overdue))}.`, href: paymentTrackingHref(overdue.id), tone: "red" as const };
   const openEwn = ewns.find((ewn) => ewn.status !== "converted" && ewn.status !== "closed");
   if (openEwn) return { label: "Review EWN", detail: openEwn.title || "Open EWN needs review.", href: `/app/ewns?ewn=${openEwn.id}`, tone: "orange" as const };
   const draft = activeEvents.find((event) => ["draft", "review", "ready"].includes(normaliseCommercialStatus(event.status)));
@@ -265,6 +332,23 @@ function projectStatusTone(status?: string | null) {
   return { bg: colors.bg, bd: colors.border, tx: colors.text, tone };
 }
 
+function demoFilteredRows<T extends { is_demo?: boolean | null }>(rows: T[], demoMode: boolean) {
+  return demoMode ? rows.filter((row) => row.is_demo === true) : rows.filter((row) => row.is_demo !== true);
+}
+
+function isOptionalSchemaError(error: any) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("could not find") ||
+    message.includes("column") ||
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    error?.code === "PGRST204"
+  );
+}
+
 export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -274,6 +358,24 @@ export default function ProjectDetailPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [statusSaving, setStatusSaving] = useState(false);
+  const [demoModeActive, setDemoModeActive] = useState(false);
+
+  useEffect(() => {
+    function syncDemoMode() {
+      try {
+        setDemoModeActive(localStorage.getItem("cc.demo.mode") === "1");
+      } catch {
+        setDemoModeActive(false);
+      }
+    }
+    syncDemoMode();
+    window.addEventListener("cc:demo-mode-changed", syncDemoMode);
+    window.addEventListener("storage", syncDemoMode);
+    return () => {
+      window.removeEventListener("cc:demo-mode-changed", syncDemoMode);
+      window.removeEventListener("storage", syncDemoMode);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -283,16 +385,23 @@ export default function ProjectDetailPage() {
       try {
         const supabase = supabaseBrowser();
         const user = await getRequiredUser(supabase);
-        const projectRes = await (supabase as any).from("projects")
-          .select("id,project_name,main_contractor,contract_type,status,job_number,start_date,completion_date,project_manager,quantity_surveyor,notes")
+        let projectRes = await (supabase as any).from("projects")
+          .select("id,project_name,main_contractor,contract_type,status,job_number,start_date,completion_date,project_manager,quantity_surveyor,notes,is_demo")
           .eq("user_id", user.id)
           .eq("id", params.id)
           .single();
+        if (projectRes.error && isOptionalSchemaError(projectRes.error)) {
+          projectRes = await (supabase as any).from("projects")
+            .select("id,project_name,main_contractor,contract_type,status,job_number,start_date,completion_date,project_manager,quantity_surveyor,notes")
+            .eq("user_id", user.id)
+            .eq("id", params.id)
+            .single();
+        }
         if (projectRes.error) throw projectRes.error;
         const nextProject = projectRes.data as ProjectRow;
 
         const eventSelects = [
-          "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,submitted_amount,assessed_amount,paid_amount,disallowed_amount,balance_outstanding,last_chased_date,next_chase_date,client_response,dispute_reason,agreed_payment_date,last_action_type,last_action_date,event_financial_summary,created_at",
+          "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,submitted_amount,assessed_amount,paid_amount,disallowed_amount,balance_outstanding,last_chased_date,next_chase_date,client_response,dispute_reason,agreed_payment_date,last_action_type,last_action_date,event_financial_summary,created_at,is_demo",
           "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,submitted_amount,assessed_amount,paid_amount,balance_outstanding,event_financial_summary,created_at",
           "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,event_financial_summary,created_at",
           "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,created_at",
@@ -303,7 +412,7 @@ export default function ProjectDetailPage() {
         ];
 
         const ewnSelects = [
-          "id,title,status,project_id,project_name,main_contractor,event_date,impact,converted_event_id",
+          "id,title,status,project_id,project_name,main_contractor,event_date,impact,converted_event_id,is_demo",
           "id,title,status,project_id,project_name,main_contractor,event_date,impact",
           "id,title,status,project_id,project_name,main_contractor",
           "id,title,status,project_name,main_contractor",
@@ -317,7 +426,7 @@ export default function ProjectDetailPage() {
 
             lastError = result.error;
             const message = String(result.error.message || "");
-            const canTryFallback = /project_id|expected_payment_date|payment_status|submitted_amount|assessed_amount|paid_amount|disallowed_amount|balance_outstanding|last_chased_date|next_chase_date|client_response|dispute_reason|agreed_payment_date|last_action_type|last_action_date|event_financial_summary|converted_event_id|event_date|impact|schema cache|relationship/i.test(message);
+            const canTryFallback = /project_id|expected_payment_date|payment_status|submitted_amount|assessed_amount|paid_amount|disallowed_amount|balance_outstanding|last_chased_date|next_chase_date|client_response|dispute_reason|agreed_payment_date|last_action_type|last_action_date|event_financial_summary|converted_event_id|event_date|impact|is_demo|schema cache|relationship/i.test(message);
             if (!canTryFallback) throw result.error;
           }
           throw lastError instanceof Error ? lastError : new Error(`Failed to load ${table}`);
@@ -329,8 +438,8 @@ export default function ProjectDetailPage() {
         ]);
         if (!active) return;
         setProject(nextProject);
-        setEvents(eventRows.filter((event) => belongsToProject(event, nextProject)));
-        setEwns(ewnRows.filter((ewn) => belongsToProject(ewn, nextProject)));
+        setEvents(demoFilteredRows(eventRows, demoModeActive).filter((event) => belongsToProject(event, nextProject)));
+        setEwns(demoFilteredRows(ewnRows, demoModeActive).filter((ewn) => belongsToProject(ewn, nextProject)));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to load project";
         if (isAuthErrorMessage(message)) {
@@ -346,7 +455,7 @@ export default function ProjectDetailPage() {
     return () => {
       active = false;
     };
-  }, [params.id, router]);
+  }, [demoModeActive, params.id, router]);
 
   const summary = useMemo(() => {
     const activeEvents = events.filter((event) => !isVoided(event));
@@ -421,6 +530,8 @@ export default function ProjectDetailPage() {
 
     setEvents((prev) => prev.map((event) => (event.id === eventId ? { ...event, ...patch } : event)));
 
+    if (demoModeActive) return;
+
     try {
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
@@ -493,6 +604,11 @@ export default function ProjectDetailPage() {
     setErr(null);
     setStatusSaving(true);
     setProject({ ...project, status: nextStatus });
+
+    if (demoModeActive) {
+      setStatusSaving(false);
+      return;
+    }
 
     try {
       const supabase = supabaseBrowser();
@@ -572,20 +688,87 @@ export default function ProjectDetailPage() {
             const balance = outstandingValue(event);
             const voided = isVoided(event);
             const balanceTone = isOverdue(event) ? projectActionColours("red") : balance > 0 ? projectActionColours("orange") : projectActionColours("green");
+            const action = projectEventAction(event);
+            const control = projectRecoveryControl(event);
+            const controlTone = projectActionColours(control.tone);
+            const commercialTone = voided ? "neutral" : normaliseCommercialStatus(event.status) === "rejected" ? "red" : isClosed(event) ? "green" : normaliseCommercialStatus(event.status) === "submitted" || normaliseCommercialStatus(event.status) === "accepted" ? "blue" : "purple";
+            const paymentTone = voided ? "neutral" : normalisePaymentStatus(event.payment_status) === "paid" ? "green" : isOverdue(event) ? "red" : balance > 0 ? "orange" : "neutral";
             return (
-            <div key={event.id} style={{ border: `1px solid ${c.border}`, background: c.soft, borderRadius: 16, padding: 14, display: "grid", gap: 12, opacity: voided ? 0.68 : 1 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) 130px 150px 140px", gap: 12, alignItems: "center" }}>
-                <div style={{ minWidth: 0 }}>
-                  <Link href={`/app/event/${event.id}`} style={{ color: voided ? c.sub : c.text, fontSize: 14, lineHeight: 1.35, fontWeight: 800, textDecoration: "none" }}>{displayEventTitle(event)}</Link>
-                  <div style={{ marginTop: 4, color: c.sub, fontSize: 12, fontWeight: 700 }}>Created {formatDateShort(event.created_at)}</div>
+            <details key={event.id} style={{ border: `1px solid ${c.border}`, background: voided ? c.soft : c.card, borderRadius: 16, padding: "10px 12px", display: "grid", gap: 0, opacity: voided ? 0.68 : 1 }}>
+              <summary style={{ cursor: "pointer", listStyle: "none", display: "grid", gridTemplateColumns: "24px minmax(0, 1fr) auto", gap: 10, alignItems: "center" }}>
+                <span
+                  aria-hidden
+                  style={{
+                    width: 24,
+                    height: 24,
+                    borderRadius: 999,
+                    display: "grid",
+                    placeItems: "center",
+                    border: `1px solid ${c.border}`,
+                    background: c.input,
+                    color: c.sub,
+                    fontSize: 12,
+                    fontWeight: 800,
+                  }}
+                >
+                  ▾
+                </span>
+                <span style={{ color: voided ? c.sub : c.text, fontSize: 14, lineHeight: 1.35, fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {displayEventTitle(event)}
+                </span>
+                <span style={{ display: "flex", gap: 7, alignItems: "center", justifyContent: "flex-end", minWidth: 0, whiteSpace: "nowrap" }}>
+                  <Badge label={money(readTotal(event.event_financial_summary))} tone="purple" />
+                  <Badge label={getCommercialStatusLabel(event.status)} tone={commercialTone} />
+                  {voided ? <Badge label="Excluded" tone="neutral" /> : <Badge label={isOverdue(event) ? "Overdue" : getPaymentStatusLabel(event.payment_status)} tone={paymentTone} />}
+                </span>
+              </summary>
+
+              <div style={{ display: "grid", gap: 14, paddingTop: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) auto", gap: 12, alignItems: "start" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <Link href={`/app/event/${event.id}`} style={{ color: voided ? c.sub : c.text, fontSize: 16, lineHeight: 1.35, fontWeight: 850, textDecoration: "none", letterSpacing: 0 }}>{displayEventTitle(event)}</Link>
+                    <div style={{ marginTop: 5, color: c.sub, fontSize: 12.5, fontWeight: 700 }}>Created {formatDateShort(event.created_at)} • {getContractLabel(event.contract_type)}</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 7, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                    <Badge label={getCommercialStatusLabel(event.status)} tone={commercialTone} />
+                    {voided ? <Badge label="Excluded" tone="neutral" /> : <Badge label={getPaymentStatusLabel(event.payment_status)} tone={paymentTone} />}
+                    <Badge label={fullMoney(readTotal(event.event_financial_summary))} tone="purple" />
+                  </div>
                 </div>
-                <Badge label={getCommercialStatusLabel(event.status)} tone={voided ? "neutral" : "blue"} />
-                {voided ? <Badge label="Excluded" tone="neutral" /> : <Badge label={getPaymentStatusLabel(event.payment_status)} tone={normalisePaymentStatus(event.payment_status) === "paid" ? "green" : isOverdue(event) ? "red" : "orange"} />}
-                <div style={{ color: c.black, fontWeight: 800, textAlign: "right" }}>{money(outstandingValue(event))}</div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
+                {[
+                  ["CE value", fullMoney(readTotal(event.event_financial_summary)), "purple"],
+                  ["Balance outstanding", fullMoney(balance), balance > 0 ? "orange" : "green"],
+                  ["Commercial status", getCommercialStatusLabel(event.status), commercialTone],
+                  ["Payment position", voided ? "Excluded" : getPaymentStatusLabel(event.payment_status), paymentTone],
+                ].map(([label, value, tone]) => {
+                  const tc = toneColours(tone as AppTone);
+                  return (
+                    <div key={label} style={{ border: `1px solid ${tc.border}`, background: tc.bg, borderRadius: 16, padding: "12px 13px", minHeight: 72, display: "grid", alignContent: "space-between", gap: 7 }}>
+                      <span style={{ color: c.sub, fontSize: 11, lineHeight: 1, fontWeight: 850, textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</span>
+                      <span style={{ color: tc.text, fontSize: 15, lineHeight: 1.15, fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
+                    </div>
+                  );
+                })}
               </div>
-              <details style={{ borderTop: `1px solid ${c.border}`, paddingTop: 10 }}>
-                <summary style={{ cursor: "pointer", color: c.blueTx, fontSize: 12.5, fontWeight: 800, listStyle: "none" }}>Manage payment tracking ▾</summary>
-                <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>
+
+              <div style={{ borderTop: `1px solid ${toneColours("purple").border}`, paddingTop: 12, display: "grid", gap: 12 }}>
+                <div style={{ color: c.purple, fontSize: 12.5, fontWeight: 850 }}>Manage payment tracking</div>
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: `1px solid ${controlTone.bd}`, background: controlTone.bg, borderRadius: 16, padding: "12px 14px" }}>
+                    <div>
+                      <div style={{ color: controlTone.tx, fontSize: 12, fontWeight: 850, textTransform: "uppercase", letterSpacing: ".04em" }}>{control.label}</div>
+                      <div style={{ color: c.sub, fontSize: 12.5, lineHeight: 1.45, marginTop: 3 }}>{control.detail}</div>
+                    </div>
+                    {action.href ? (
+                      <Link href={action.href} style={{ ...buttonStyle("primary"), borderColor: controlTone.tx, background: controlTone.tx, color: control.tone === "orange" || control.tone === "green" ? "#07111d" : "#fff", flex: "0 0 auto" }}>{action.label}</Link>
+                    ) : (
+                      <button type="button" style={{ ...buttonStyle("primary"), borderColor: controlTone.tx, background: controlTone.tx, color: control.tone === "orange" || control.tone === "green" ? "#07111d" : "#fff", cursor: "default", flex: "0 0 auto" }}>{action.label}</button>
+                    )}
+                  </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>
                   <TrackingSelect label="CE status" value={normaliseCommercialStatus(event.status)} onChange={(value) => void updateProjectEventTracking(event.id, { status: value })}>
                     {getAllowedCommercialStatusOptions(event.status).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </TrackingSelect>
@@ -617,9 +800,10 @@ export default function ProjectDetailPage() {
                     <Link href={`/app/event/${event.id}`} style={buttonStyle("primary")}>Open CE →</Link>
                   </div>
                 </div>
-                <div style={{ marginTop: 10, fontSize: 12, color: c.sub, lineHeight: 1.45 }}>Tracking stays internal and powers the project totals plus the main recovery dashboard.</div>
-              </details>
-            </div>
+                </div>
+              </div>
+              </div>
+            </details>
           );})}
         </div>
       </section>

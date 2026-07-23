@@ -114,12 +114,12 @@ function LoginPageContent() {
     blueText: "#2563eb",
   };
 
-  const modeTitle = mode === "signin" ? "Welcome back" : mode === "signup" ? "Create your account" : "Reset password";
+  const modeTitle = mode === "signin" ? "Welcome back" : mode === "signup" ? "Request early access" : "Reset password";
   const modeCopy =
     mode === "signin"
       ? "Access your commercial recovery dashboard, CE / VO packs and payment tracking."
       : mode === "signup"
-      ? "Create an account to start building stronger commercial records and recovery packs."
+      ? "Create an account to request early access. During the trial period, verified users are activated before the full app opens."
       : "Enter your email and we’ll send instructions to reset your password.";
 
   return (
@@ -201,7 +201,7 @@ function LoginPageContent() {
               cursor: "pointer",
             }}
           >
-            {mode === "signin" ? "Create account" : "Sign in"}
+            {mode === "signin" ? "Request access" : "Sign in"}
           </button>
         </div>
       </header>
@@ -340,7 +340,7 @@ function LoginPageContent() {
                 cursor: "pointer",
               }}
             >
-              Create account
+              Request access
             </button>
           </div>
 
@@ -483,7 +483,7 @@ function LoginPageContent() {
                 boxShadow: disabled ? "none" : "0 14px 28px rgba(109,74,255,0.20)",
               }}
             >
-              {loading ? "Working…" : mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset instructions"}
+              {loading ? "Working…" : mode === "signin" ? "Sign in" : mode === "signup" ? "Request early access" : "Send reset instructions"}
             </button>
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 13, color: c.sub }}>
@@ -495,7 +495,7 @@ function LoginPageContent() {
                       onClick={() => setMode("signup")}
                       style={{ border: "none", background: "transparent", padding: 0, color: c.purple, fontWeight: 850, cursor: "pointer" }}
                     >
-                      Create account
+                      Request access
                     </button>
                   </>
                 ) : mode === "signup" ? (

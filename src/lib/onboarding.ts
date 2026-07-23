@@ -19,6 +19,7 @@ export type OnboardingIssueDraft = {
   projectId: string | null;
   projectName: string;
   tradePackage: string;
+  title: string;
   description: string;
   lastEditedAt?: string | null;
 };
@@ -68,6 +69,7 @@ export const EMPTY_ISSUE_DRAFT: OnboardingIssueDraft = {
   projectId: null,
   projectName: "",
   tradePackage: "",
+  title: "",
   description: "",
   lastEditedAt: null,
 };
@@ -181,6 +183,6 @@ export function resolveOnboardingState({
     return prefs?.welcomeDismissedAt ? "PROJECT_SETUP" : "WELCOME";
   }
 
-  if (issueDraft && hasMeaningfulIssueText(issueDraft.description)) return "FIRST_ISSUE_IN_PROGRESS";
+  if (issueDraft && (issueDraft.title.trim() || hasMeaningfulIssueText(issueDraft.description))) return "FIRST_ISSUE_IN_PROGRESS";
   return "FIRST_ISSUE";
 }

@@ -11,6 +11,27 @@ type AdminPackRow = { user_id: string | null; created_at: string | null; total_v
 type AdminCreditRow = { user_id: string | null; credits_remaining: number | null };
 type AdminBillingRow = { user_id: string | null; amount: number | null; status: string | null; created_at: string | null };
 
+type AccessRequestRow = {
+  id: string;
+  early_access_request_email: string | null;
+  early_access_requested_at: string | null;
+  early_access_request_note: string | null;
+  early_access_request_status: string | null;
+  account_status: string | null;
+  source: "request" | "signup";
+};
+
+type ProfileAccessRow = {
+  id: string;
+  account_status: string | null;
+  subscription_status: string | null;
+  is_admin_unlimited: boolean | null;
+  early_access_request_email: string | null;
+  early_access_requested_at: string | null;
+  early_access_request_note: string | null;
+  early_access_request_status: string | null;
+};
+
 type FeedbackRow = {
   id: string;
   user_id: string | null;
@@ -110,6 +131,36 @@ function daysAgo(days: number) {
   return d.toISOString();
 }
 
+function isRecoverableAnalyticsError(error: any) {
+  const message = String(error?.message || error?.details || error?.hint || "").toLowerCase();
+  const code = String(error?.code || "").toUpperCase();
+  return (
+    code === "42P01" ||
+    code === "42703" ||
+    code === "PGRST204" ||
+    message.includes("does not exist") ||
+    message.includes("could not find") ||
+    message.includes("schema cache")
+  );
+}
+
+async function optionalAnalyticsQuery<T>(
+  label: string,
+  query: PromiseLike<{ data: T | null; count?: number | null; error: any }>,
+  fallbackData: T
+) {
+  const res = await query;
+  if (!res.error) return { ...res, skipped: false as const, warning: null as string | null };
+  if (!isRecoverableAnalyticsError(res.error)) throw res.error;
+  return {
+    data: fallbackData,
+    count: 0,
+    error: null,
+    skipped: true as const,
+    warning: `${label}: ${res.error.message || "analytics source unavailable"}`,
+  };
+}
+
 function countBy<T>(rows: T[], getKey: (row: T) => string | null | undefined, fallback = "Unknown") {
   const map = new Map<string, number>();
   for (const row of rows) {
@@ -147,22 +198,48 @@ async function loadAnalytics(admin: any) {
   const today = new Date().toISOString().slice(0, 10);
 
   const [eventsRes, sessionsRes, pageviewsRes, visitorsTodayRes, visitorsMonthRes, aiRunsRes, errorsRes] = await Promise.all([
-    (admin as any).from("analytics_events").select("event_name,page_path,user_id,created_at,metadata").gte("created_at", since30).order("created_at", { ascending: false }).limit(1500),
-    (admin as any).from("analytics_sessions").select("user_id,utm_source,utm_campaign,referrer,landing_page,device,country,started_at").gte("started_at", since30).order("started_at", { ascending: false }).limit(1500),
-    (admin as any).from("analytics_pageviews").select("page_path,user_id,created_at").gte("created_at", since30).order("created_at", { ascending: false }).limit(1500),
-    (admin as any).from("analytics_visitors").select("id", { count: "exact", head: true }).gte("last_seen_at", `${today}T00:00:00.000Z`),
-    (admin as any).from("analytics_visitors").select("id", { count: "exact", head: true }).gte("last_seen_at", since30),
-    (admin as any).from("ai_generation_runs").select("generation_type,status,duration_ms,estimated_cost_gbp,created_at").gte("created_at", since30).order("created_at", { ascending: false }).limit(500),
-    (admin as any).from("admin_error_events").select("route,event_name,error_type,sanitized_message,created_at").gte("created_at", since7).order("created_at", { ascending: false }).limit(50),
+    optionalAnalyticsQuery<AnalyticsEventRow[]>(
+      "analytics_events",
+      (admin as any).from("analytics_events").select("event_name,page_path,user_id,created_at,metadata").gte("created_at", since30).order("created_at", { ascending: false }).limit(1500),
+      []
+    ),
+    optionalAnalyticsQuery<AnalyticsSessionRow[]>(
+      "analytics_sessions",
+      (admin as any).from("analytics_sessions").select("user_id,utm_source,utm_campaign,referrer,landing_page,device,country,started_at").gte("started_at", since30).order("started_at", { ascending: false }).limit(1500),
+      []
+    ),
+    optionalAnalyticsQuery<AnalyticsPageviewRow[]>(
+      "analytics_pageviews",
+      (admin as any).from("analytics_pageviews").select("page_path,user_id,created_at").gte("created_at", since30).order("created_at", { ascending: false }).limit(1500),
+      []
+    ),
+    optionalAnalyticsQuery<null>(
+      "analytics_visitors_today",
+      (admin as any).from("analytics_visitors").select("id", { count: "exact", head: true }).gte("last_seen_at", `${today}T00:00:00.000Z`),
+      null
+    ),
+    optionalAnalyticsQuery<null>(
+      "analytics_visitors_month",
+      (admin as any).from("analytics_visitors").select("id", { count: "exact", head: true }).gte("last_seen_at", since30),
+      null
+    ),
+    optionalAnalyticsQuery<AiGenerationRunRow[]>(
+      "ai_generation_runs",
+      (admin as any).from("ai_generation_runs").select("generation_type,status,duration_ms,estimated_cost_gbp,created_at").gte("created_at", since30).order("created_at", { ascending: false }).limit(500),
+      []
+    ),
+    optionalAnalyticsQuery<AdminErrorEventRow[]>(
+      "admin_error_events",
+      (admin as any).from("admin_error_events").select("route,event_name,error_type,sanitized_message,created_at").gte("created_at", since7).order("created_at", { ascending: false }).limit(50),
+      []
+    ),
   ]);
 
   const results = [eventsRes, sessionsRes, pageviewsRes, visitorsTodayRes, visitorsMonthRes, aiRunsRes, errorsRes];
-  const missing = results.find((res) => res.error && /relation .* does not exist/i.test(res.error.message || ""));
-  if (missing) {
+  const analyticsWarnings = results.map((res) => res.warning).filter(Boolean);
+  if (eventsRes.skipped && sessionsRes.skipped && pageviewsRes.skipped && visitorsTodayRes.skipped && visitorsMonthRes.skipped) {
     return { available: false, reason: "Analytics SQL has not been run yet." };
   }
-  const failed = results.find((res) => res.error);
-  if (failed) throw failed.error;
 
   const events = (eventsRes.data ?? []) as AnalyticsEventRow[];
   const sessions = (sessionsRes.data ?? []) as AnalyticsSessionRow[];
@@ -185,6 +262,7 @@ async function loadAnalytics(admin: any) {
 
   return {
     available: true,
+    warnings: analyticsWarnings,
     headline: {
       visitorsToday: visitorsTodayRes.count || 0,
       visitors30Days: visitorsMonthRes.count || 0,
@@ -251,13 +329,15 @@ export async function GET(req: NextRequest) {
     }
 
     const admin = supabaseAdmin() as any;
-    const [users, eventsRes, packsRes, creditsRes, billingRes, feedbackRes] = await Promise.all([
+    const [users, eventsRes, packsRes, creditsRes, billingRes, feedbackRes, profilesRes] = await Promise.all([
       listAllUsers(),
       (admin as any).from("events").select("user_id,created_at,event_financial_summary"),
       (admin as any).from("event_packs").select("user_id,created_at,total_value"),
       (admin as any).from("user_credits").select("user_id,credits_remaining"),
       (admin as any).from("billing_transactions").select("user_id,amount,status,created_at").neq("status", "void"),
       (admin as any).from("feedback").select("id,user_id,user_email,page_url,feedback_type,message,status,created_at").order("created_at", { ascending: false }).limit(50),
+      (admin as any).from("profiles")
+        .select("id,account_status,subscription_status,is_admin_unlimited,early_access_request_email,early_access_requested_at,early_access_request_note,early_access_request_status"),
     ]);
 
     if (eventsRes.error && !/relation .*events.* does not exist/i.test(eventsRes.error.message)) throw eventsRes.error;
@@ -265,12 +345,50 @@ export async function GET(req: NextRequest) {
     if (creditsRes.error && !/relation .*user_credits.* does not exist/i.test(creditsRes.error.message)) throw creditsRes.error;
     if (billingRes.error && !/relation .*billing_transactions.* does not exist/i.test(billingRes.error.message)) throw billingRes.error;
     if (feedbackRes.error && !/relation .*feedback.* does not exist/i.test(feedbackRes.error.message)) throw feedbackRes.error;
+    if (
+      profilesRes.error &&
+      !/relation .*profiles.* does not exist/i.test(profilesRes.error.message) &&
+      !/column .*early_access/i.test(profilesRes.error.message)
+    ) {
+      throw profilesRes.error;
+    }
 
     const events = (eventsRes.data ?? []) as AdminEventRow[];
     const packs = (packsRes.data ?? []) as AdminPackRow[];
     const credits = (creditsRes.data ?? []) as AdminCreditRow[];
     const billing = (billingRes.data ?? []) as AdminBillingRow[];
     const feedback = (feedbackRes.data ?? []) as FeedbackRow[];
+    const profiles = (profilesRes.error ? [] : (profilesRes.data ?? [])) as ProfileAccessRow[];
+    const profilesById = new Map(profiles.map((profile) => [profile.id, profile]));
+    const accessRequests = users
+      .map((u: any): AccessRequestRow | null => {
+        const profile = profilesById.get(u.id);
+        const status = profile?.account_status || "pending_activation";
+        const requestStatus = profile?.early_access_request_status || "not_requested";
+        const subscriptionStatus = profile?.subscription_status || "inactive";
+        const approved =
+          Boolean(profile?.is_admin_unlimited) ||
+          status === "trial_active" ||
+          status === "active" ||
+          subscriptionStatus === "active" ||
+          subscriptionStatus === "trialing";
+
+        if (approved || status === "suspended" || requestStatus === "declined") return null;
+        if (requestStatus !== "requested" && requestStatus !== "reviewing" && status !== "pending_activation") return null;
+
+        return {
+          id: u.id,
+          early_access_request_email: profile?.early_access_request_email || u.email || null,
+          early_access_requested_at: profile?.early_access_requested_at || u.created_at || null,
+          early_access_request_note: profile?.early_access_request_note || null,
+          early_access_request_status: requestStatus === "not_requested" ? "signup_pending" : requestStatus,
+          account_status: status,
+          source: requestStatus === "requested" || requestStatus === "reviewing" ? "request" : "signup",
+        };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => String(b.early_access_requested_at || "").localeCompare(String(a.early_access_requested_at || "")))
+      .slice(0, 80) as AccessRequestRow[];
 
     const analytics = await loadAnalytics(admin).catch((error: any) => ({
       available: false,
@@ -325,7 +443,7 @@ export async function GET(req: NextRequest) {
       revenue: rows.reduce((sum, row) => sum + row.revenue, 0),
     };
 
-    return NextResponse.json({ rows, totals, feedback, analytics });
+    return NextResponse.json({ rows, totals, feedback, analytics, accessRequests });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || "Failed to load admin overview" }, { status: 500 });
   }

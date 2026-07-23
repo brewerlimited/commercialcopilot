@@ -213,6 +213,7 @@ export default function SettingsPage() {
   const [sessionSettings, setSessionSettings] = useState<SessionSecuritySettings>(DEFAULT_SESSION_SECURITY_SETTINGS);
   const [loaded, setLoaded] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [forceOnboardingActive, setForceOnboardingActive] = useState(false);
   const [billing, setBilling] = useState(() => getBillingSnapshot({ plan_type: "starter", subscription_status: "inactive" }, { credits_remaining: 0 }));
 
   useEffect(() => {
@@ -256,6 +257,11 @@ export default function SettingsPage() {
       }
 
       setSessionSettings(getSessionSecuritySettings());
+      try {
+        setForceOnboardingActive(window.localStorage.getItem("cc.force.onboarding") === "1");
+      } catch {
+        setForceOnboardingActive(false);
+      }
       setLoaded(true);
     })();
   }, []);
@@ -276,6 +282,23 @@ export default function SettingsPage() {
       saveSessionSecuritySettings(next);
       return next;
     });
+  }
+
+  function startForcedOnboarding() {
+    try {
+      window.localStorage.setItem("cc.force.onboarding", "1");
+      window.dispatchEvent(new Event("cc:force-onboarding-changed"));
+      setForceOnboardingActive(true);
+    } catch {}
+    window.location.href = "/app?onboarding=1";
+  }
+
+  function clearForcedOnboarding() {
+    try {
+      window.localStorage.removeItem("cc.force.onboarding");
+      window.dispatchEvent(new Event("cc:force-onboarding-changed"));
+    } catch {}
+    setForceOnboardingActive(false);
   }
 
 
@@ -299,8 +322,8 @@ export default function SettingsPage() {
         >
           <div style={{ display: "grid", gap: 4 }}>
             <div style={{ fontSize: 17, fontWeight: 700, color: c.text }}>Internal tools</div>
-            <div style={{ fontSize: 13, lineHeight: 1.55, color: c.sub, maxWidth: 720 }}>
-              Operator-only reporting and user tracking for Commercial Co-Pilot.
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: c.sub, maxWidth: 760 }}>
+              Operator-only reporting, user tracking and admin testing controls for Commercial Co-Pilot.
             </div>
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -322,6 +345,51 @@ export default function SettingsPage() {
             >
               Open admin dashboard
             </Link>
+            <button
+              type="button"
+              onClick={startForcedOnboarding}
+              style={{
+                height: 42,
+                padding: "0 14px",
+                borderRadius: 14,
+                border: `1px solid ${c.purpleBorder}`,
+                background: c.purpleSoft,
+                color: c.purple,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 800,
+                cursor: "pointer",
+              }}
+            >
+              Force onboarding
+            </button>
+            <button
+              type="button"
+              onClick={clearForcedOnboarding}
+              disabled={!forceOnboardingActive}
+              style={{
+                height: 42,
+                padding: "0 14px",
+                borderRadius: 14,
+                border: `1px solid ${c.border}`,
+                background: c.input,
+                color: forceOnboardingActive ? c.text : c.sub,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 750,
+                cursor: forceOnboardingActive ? "pointer" : "not-allowed",
+                opacity: forceOnboardingActive ? 1 : 0.65,
+              }}
+            >
+              Clear forced onboarding
+            </button>
+          </div>
+          <div style={{ border: `1px solid ${c.purpleBorder}`, background: c.purpleSoft, color: c.purple, borderRadius: 14, padding: "11px 13px", fontSize: 12.5, lineHeight: 1.45, fontWeight: 750 }}>
+            {forceOnboardingActive
+              ? "Forced onboarding is active on this device. Open the dashboard to replay the first setup flow."
+              : "Force onboarding replays the real first setup flow for your admin session only. It does not delete projects, CEs or account data."}
           </div>
         </section>
       ) : null}

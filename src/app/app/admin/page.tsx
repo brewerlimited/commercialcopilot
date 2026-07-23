@@ -30,9 +30,21 @@ type FeedbackRow = {
   created_at: string;
 };
 
+type AccessRequestRow = {
+  id: string;
+  early_access_request_email: string | null;
+  early_access_requested_at: string | null;
+  early_access_request_note: string | null;
+  early_access_request_status: string | null;
+  account_status: string | null;
+  approved_at: string | null;
+  source?: "request" | "signup";
+};
+
 type AdminPayload = {
   rows: AdminRow[];
   feedback: FeedbackRow[];
+  accessRequests: AccessRequestRow[];
   totals: {
     users: number;
     ceCount: number;
@@ -124,12 +136,35 @@ export default function AdminPage() {
   const [seedEmail, setSeedEmail] = useState("");
   const [seedStatus, setSeedStatus] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
+  const [accessActionStatus, setAccessActionStatus] = useState<string | null>(null);
+  const [accessActionBusyId, setAccessActionBusyId] = useState<string | null>(null);
+  const [manualAccessEmail, setManualAccessEmail] = useState("");
   const [payload, setPayload] = useState<AdminPayload>({
     rows: [],
     feedback: [],
+    accessRequests: [],
     totals: { users: 0, ceCount: 0, creditsUsed: 0, ceValue: 0, revenue: 0 },
     analytics: { available: false, reason: "Loading analytics..." },
   });
+
+  async function fetchAdminOverview() {
+    const supabase = supabaseBrowser();
+    const sessionRes = await supabase.auth.getSession();
+    const token = (sessionRes.data as any)?.session?.access_token;
+    const res = await fetch("/api/admin/overview", {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      cache: "no-store",
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error || "Failed to load admin overview");
+    setPayload({
+      rows: json.rows || [],
+      feedback: json.feedback || [],
+      accessRequests: json.accessRequests || [],
+      totals: json.totals || { users: 0, ceCount: 0, creditsUsed: 0, ceValue: 0, revenue: 0 },
+      analytics: json.analytics || { available: false, reason: "Analytics unavailable" },
+    });
+  }
 
   useEffect(() => {
     (async () => {
@@ -155,15 +190,7 @@ export default function AdminPage() {
           return;
         }
 
-        const sessionRes = await supabase.auth.getSession();
-        const token = (sessionRes.data as any)?.session?.access_token;
-        const res = await fetch("/api/admin/overview", {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          cache: "no-store",
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json?.error || "Failed to load admin overview");
-        setPayload(json);
+        await fetchAdminOverview();
       } catch (e: any) {
         setError(e?.message || "Failed to load admin dashboard");
       } finally {
@@ -182,6 +209,66 @@ export default function AdminPage() {
         .includes(q)
     );
   }, [payload.rows, query]);
+
+
+  async function updateAccessRequest(userId: string, action: "approve" | "decline") {
+    try {
+      setAccessActionBusyId(userId);
+      setAccessActionStatus(null);
+      const supabase = supabaseBrowser();
+      const sessionRes = await supabase.auth.getSession();
+      const token = (sessionRes.data as any)?.session?.access_token;
+      const res = await fetch("/api/admin/access-request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ userId, action }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Failed to update access request");
+      setAccessActionStatus(action === "approve" ? "Access approved. The user can now enter the app." : "Access request declined.");
+      await fetchAdminOverview();
+    } catch (e: any) {
+      setAccessActionStatus(e?.message || "Failed to update access request");
+    } finally {
+      setAccessActionBusyId(null);
+    }
+  }
+
+  async function approveManualEmail() {
+    const email = manualAccessEmail.trim();
+    if (!email) {
+      setAccessActionStatus("Enter an email to approve.");
+      return;
+    }
+
+    try {
+      setAccessActionBusyId("manual-email");
+      setAccessActionStatus(null);
+      const supabase = supabaseBrowser();
+      const sessionRes = await supabase.auth.getSession();
+      const token = (sessionRes.data as any)?.session?.access_token;
+      const res = await fetch("/api/admin/access-request", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ email, action: "approve" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Failed to approve email");
+      setManualAccessEmail("");
+      setAccessActionStatus(`${email} approved. They can now enter the app.`);
+      await fetchAdminOverview();
+    } catch (e: any) {
+      setAccessActionStatus(e?.message || "Failed to approve email");
+    } finally {
+      setAccessActionBusyId(null);
+    }
+  }
 
 
   async function seedDemoData() {
@@ -245,6 +332,157 @@ export default function AdminPage() {
         <StatCard label="Credits used" value={String(payload.totals.creditsUsed)} hint="Generated pack count" />
         <StatCard label="Total CE value" value={money(payload.totals.ceValue)} hint="Sum of final CE values" />
         <StatCard label="Revenue" value={money(payload.totals.revenue)} hint="Paid subscriptions and credit purchases" />
+      </section>
+
+      <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 20, display: "grid", gap: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "start", flexWrap: "wrap" }}>
+          <div style={{ display: "grid", gap: 4 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: c.black }}>Signups and early access requests</div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: c.sub }}>
+              Approve verified trial users into the full app. New email signups also appear here even if they requested access by phone, email or LinkedIn.
+            </div>
+          </div>
+          <span style={{ border: `1px solid ${c.border}`, borderRadius: 999, background: c.soft, color: c.sub, padding: "7px 10px", fontSize: 12, fontWeight: 800 }}>
+            {payload.accessRequests.length} pending
+          </span>
+        </div>
+
+        <div style={{ border: `1px solid ${c.border}`, borderRadius: 18, background: c.soft, padding: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            value={manualAccessEmail}
+            onChange={(e) => setManualAccessEmail(e.target.value)}
+            placeholder="Approve signed-up user by email"
+            type="email"
+            style={{
+              flex: "1 1 320px",
+              height: 42,
+              borderRadius: 14,
+              border: `1px solid ${c.border}`,
+              background: "#ffffff",
+              padding: "0 14px",
+              fontSize: 14,
+              color: c.text,
+              outline: "none",
+            }}
+          />
+          <button
+            type="button"
+            onClick={approveManualEmail}
+            disabled={accessActionBusyId === "manual-email"}
+            style={{
+              height: 42,
+              borderRadius: 14,
+              border: `1px solid ${accessActionBusyId === "manual-email" ? c.border : "var(--green-border)"}`,
+              background: accessActionBusyId === "manual-email" ? "#ffffff" : "var(--green-bg)",
+              color: accessActionBusyId === "manual-email" ? c.sub : c.greenText,
+              padding: "0 16px",
+              fontWeight: 850,
+              cursor: accessActionBusyId === "manual-email" ? "not-allowed" : "pointer",
+            }}
+          >
+            {accessActionBusyId === "manual-email" ? "Approving…" : "Approve email"}
+          </button>
+        </div>
+
+        {accessActionStatus ? (
+          <div
+            style={{
+              border: `1px solid ${accessActionStatus.toLowerCase().includes("failed") ? "var(--red-border)" : "var(--green-border)"}`,
+              background: accessActionStatus.toLowerCase().includes("failed") ? "var(--red-bg)" : "var(--green-bg)",
+              color: accessActionStatus.toLowerCase().includes("failed") ? c.redText : c.greenText,
+              borderRadius: 16,
+              padding: 12,
+              fontSize: 13,
+              fontWeight: 800,
+            }}
+          >
+            {accessActionStatus}
+          </div>
+        ) : null}
+
+        {payload.accessRequests.length === 0 ? (
+          <div style={{ border: `1px solid ${c.border}`, borderRadius: 18, padding: 18, background: c.soft, color: c.sub, fontSize: 13, fontWeight: 700 }}>
+            No pending early access requests.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {payload.accessRequests.map((request) => {
+              const busy = accessActionBusyId === request.id;
+              return (
+                <div
+                  key={request.id}
+                  style={{
+                    border: `1px solid ${c.border}`,
+                    borderRadius: 18,
+                    padding: 16,
+                    background: "#ffffff",
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr) auto",
+                    gap: 14,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 6, minWidth: 0 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 14, fontWeight: 850, color: c.black, overflowWrap: "anywhere" }}>
+                        {request.early_access_request_email || request.id}
+                      </div>
+                      <span style={{ border: `1px solid ${c.border}`, background: c.soft, borderRadius: 999, padding: "5px 9px", color: c.sub, fontSize: 11, fontWeight: 850 }}>
+                        {request.early_access_request_status || "requested"}
+                      </span>
+                      <span style={{ border: `1px solid ${c.border}`, background: "#ffffff", borderRadius: 999, padding: "5px 9px", color: c.sub, fontSize: 11, fontWeight: 850 }}>
+                        {request.source === "signup" ? "email signup" : "access form"}
+                      </span>
+                      <span style={{ color: c.sub, fontSize: 12, fontWeight: 700 }}>
+                        {niceDate(request.early_access_requested_at)}
+                      </span>
+                    </div>
+                    <div style={{ color: c.sub, fontSize: 13, lineHeight: 1.55 }}>
+                      {request.early_access_request_note || "No request note provided."}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button
+                      type="button"
+                      onClick={() => updateAccessRequest(request.id, "approve")}
+                      disabled={busy}
+                      style={{
+                        height: 40,
+                        borderRadius: 14,
+                        border: `1px solid ${busy ? c.border : "var(--green-border)"}`,
+                        background: busy ? c.soft : "var(--green-bg)",
+                        color: busy ? c.sub : c.greenText,
+                        padding: "0 14px",
+                        fontWeight: 850,
+                        cursor: busy ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {busy ? "Working…" : "Approve"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateAccessRequest(request.id, "decline")}
+                      disabled={busy}
+                      style={{
+                        height: 40,
+                        borderRadius: 14,
+                        border: `1px solid ${busy ? c.border : "var(--red-border)"}`,
+                        background: busy ? c.soft : "var(--red-bg)",
+                        color: busy ? c.sub : c.redText,
+                        padding: "0 14px",
+                        fontWeight: 850,
+                        cursor: busy ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      Decline
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section style={{ background: c.card, border: `1px solid ${c.border}`, borderRadius: 22, padding: 20, display: "grid", gap: 16 }}>

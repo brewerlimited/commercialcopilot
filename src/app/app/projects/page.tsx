@@ -18,6 +18,7 @@ type ProjectRow = {
   status: string | null;
   job_number?: string | null;
   updated_at?: string | null;
+  is_demo?: boolean | null;
 };
 
 type ProjectSeed = {
@@ -27,6 +28,7 @@ type ProjectSeed = {
   contract_type: string | null;
   status: "live";
   updated_at: string;
+  is_demo?: boolean | null;
 };
 
 type EventRow = {
@@ -46,6 +48,7 @@ type EventRow = {
   paid_amount?: number | null;
   balance_outstanding?: number | null;
   event_financial_summary?: unknown;
+  is_demo?: boolean | null;
 };
 
 type EwnRow = {
@@ -55,6 +58,7 @@ type EwnRow = {
   project_id?: string | null;
   project_name?: string | null;
   main_contractor?: string | null;
+  is_demo?: boolean | null;
 };
 
 const PROJECT_STATUS_OPTIONS = [
@@ -121,6 +125,23 @@ function isVoided(event: EventRow) {
 
 function projectKey(project: { project_name?: string | null; main_contractor?: string | null }) {
   return `${String(project.project_name ?? "").trim().toLowerCase()}__${String(project.main_contractor ?? "").trim().toLowerCase()}`;
+}
+
+function demoFilteredRows<T extends { is_demo?: boolean | null }>(rows: T[], demoMode: boolean) {
+  return demoMode ? rows.filter((row) => row.is_demo === true) : rows.filter((row) => row.is_demo !== true);
+}
+
+function isOptionalSchemaError(error: any) {
+  const message = `${error?.message || ""} ${error?.details || ""} ${error?.hint || ""}`.toLowerCase();
+  return (
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("could not find") ||
+    message.includes("column") ||
+    error?.code === "42P01" ||
+    error?.code === "42703" ||
+    error?.code === "PGRST204"
+  );
 }
 
 function deriveMissingProjects(userId: string, projectRows: ProjectRow[], eventRows: EventRow[], ewnRows: EwnRow[]) {
@@ -209,6 +230,24 @@ export default function ProjectsPage() {
   const [status, setStatus] = useState("live");
   const [err, setErr] = useState<string | null>(null);
   const [savingStatusId, setSavingStatusId] = useState<string | null>(null);
+  const [demoModeActive, setDemoModeActive] = useState(false);
+
+  useEffect(() => {
+    function syncDemoMode() {
+      try {
+        setDemoModeActive(localStorage.getItem("cc.demo.mode") === "1");
+      } catch {
+        setDemoModeActive(false);
+      }
+    }
+    syncDemoMode();
+    window.addEventListener("cc:demo-mode-changed", syncDemoMode);
+    window.addEventListener("storage", syncDemoMode);
+    return () => {
+      window.removeEventListener("cc:demo-mode-changed", syncDemoMode);
+      window.removeEventListener("storage", syncDemoMode);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -220,7 +259,7 @@ export default function ProjectsPage() {
         const user = await getRequiredUser(supabase);
 
         const eventSelects = [
-          "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,submitted_amount,assessed_amount,paid_amount,balance_outstanding,event_financial_summary",
+          "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,submitted_amount,assessed_amount,paid_amount,balance_outstanding,event_financial_summary,is_demo",
           "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status,event_financial_summary",
           "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,expected_payment_date,payment_status",
           "id,title,status,project_id,project_name,main_contractor,contract_type,event_number,event_reference,event_financial_summary",
@@ -230,7 +269,7 @@ export default function ProjectsPage() {
         ];
 
         const ewnSelects = [
-          "id,title,status,project_id,project_name,main_contractor",
+          "id,title,status,project_id,project_name,main_contractor,is_demo",
           "id,title,status,project_name,main_contractor",
         ];
 
@@ -242,22 +281,28 @@ export default function ProjectsPage() {
 
             lastError = result.error;
             const message = String(result.error.message || "");
-            const canTryFallback = /project_id|expected_payment_date|payment_status|submitted_amount|assessed_amount|paid_amount|balance_outstanding|event_financial_summary|schema cache|relationship/i.test(message);
+            const canTryFallback = /project_id|expected_payment_date|payment_status|submitted_amount|assessed_amount|paid_amount|balance_outstanding|event_financial_summary|is_demo|schema cache|relationship/i.test(message);
             if (!canTryFallback) throw result.error;
           }
           throw lastError instanceof Error ? lastError : new Error(`Failed to load ${table}`);
         }
 
-        const [projectRes, eventRows, ewnRows] = await Promise.all([
-          (supabase as any).from("projects").select("id,project_name,main_contractor,contract_type,status,job_number,updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }),
+        const [projectResInitial, eventRows, ewnRows] = await Promise.all([
+          (supabase as any).from("projects").select("id,project_name,main_contractor,contract_type,status,job_number,updated_at,is_demo").eq("user_id", user.id).order("updated_at", { ascending: false }),
           selectWithFallback<EventRow>("events", eventSelects),
           selectWithFallback<EwnRow>("ewns", ewnSelects),
         ]);
+        let projectRes = projectResInitial;
+        if (projectRes.error && isOptionalSchemaError(projectRes.error)) {
+          projectRes = await (supabase as any).from("projects").select("id,project_name,main_contractor,contract_type,status,job_number,updated_at").eq("user_id", user.id).order("updated_at", { ascending: false });
+        }
         if (projectRes.error) throw projectRes.error;
         if (!active) return;
 
-        const projectRows = (projectRes.data ?? []) as ProjectRow[];
-        const missingProjects = deriveMissingProjects(user.id, projectRows, eventRows, ewnRows);
+        const projectRows = demoFilteredRows((projectRes.data ?? []) as ProjectRow[], demoModeActive);
+        const filteredEventRows = demoFilteredRows(eventRows, demoModeActive);
+        const filteredEwnRows = demoFilteredRows(ewnRows, demoModeActive);
+        const missingProjects = demoModeActive ? [] : deriveMissingProjects(user.id, projectRows, filteredEventRows, filteredEwnRows);
 
         if (missingProjects.length > 0) {
           const repairRes = await (supabase as any).from("projects")
@@ -268,8 +313,8 @@ export default function ProjectsPage() {
         }
 
         setProjects(projectRows);
-        setEvents(eventRows);
-        setEwns(ewnRows);
+        setEvents(filteredEventRows);
+        setEwns(filteredEwnRows);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to load projects";
         if (isAuthErrorMessage(message)) {
@@ -285,7 +330,7 @@ export default function ProjectsPage() {
     return () => {
       active = false;
     };
-  }, [router]);
+  }, [demoModeActive, router]);
 
   const projectSummaries = useMemo(() => {
     return projects.map((project) => {
@@ -349,6 +394,11 @@ export default function ProjectsPage() {
       project.id === projectId ? { ...project, status: nextStatus, updated_at: new Date().toISOString() } : project
     )));
 
+    if (demoModeActive) {
+      setSavingStatusId(null);
+      return;
+    }
+
     try {
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
@@ -375,7 +425,7 @@ export default function ProjectsPage() {
         eyebrow="Commercial projects"
         title="Projects"
         description="Project-level recovery, payment and EWN control across live jobs."
-        actions={<PrimaryButton href="/app/projects/new">+ New Project</PrimaryButton>}
+        actions={<PrimaryButton href={demoModeActive ? "/app/projects" : "/app/projects/new"}>+ New Project</PrimaryButton>}
       />
 
       <div className="app-project-metrics" style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12 }}>

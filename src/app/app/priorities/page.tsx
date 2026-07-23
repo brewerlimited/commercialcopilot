@@ -53,6 +53,10 @@ function money(v: number | null) {
   return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }).format(Number.isFinite(v) ? v : 0);
 }
 
+function paymentTrackingHref(eventId: string) {
+  return `/app?register=1&trackPayment=${encodeURIComponent(eventId)}`;
+}
+
 function dateOnly(dateLike?: string | null) {
   if (!dateLike) return null;
   const d = new Date(dateLike);
@@ -111,7 +115,7 @@ function buildPriorities(events: EventRow[]) {
         label: "Payment overdue",
         detail: `Expected payment ${formatDateShort(event.expected_payment_date)}. ${actionAgeText}`,
         value,
-        href: `/app?trackPayment=${encodeURIComponent(event.id)}`,
+        href: paymentTrackingHref(event.id),
         cta: "Track payment",
         tone: "red",
         severity: 1,
@@ -143,7 +147,7 @@ function buildPriorities(events: EventRow[]) {
         label: status === "accepted" ? "Accepted / unpaid" : "Submitted / unpaid",
         detail: `${status === "accepted" ? "Accepted" : "Submitted"} ${event.submitted_date ? formatDateShort(event.submitted_date) : "for payment"}. ${actionAgeText}`,
         value,
-        href: `/app?trackPayment=${encodeURIComponent(event.id)}`,
+        href: paymentTrackingHref(event.id),
         cta: "Track payment",
         tone: "blue",
         severity: 3,
@@ -285,8 +289,8 @@ export default function PrioritiesPage() {
                   <span style={{ color: appUi.muted, fontSize: 13, lineHeight: 1.45 }}>{item.detail}</span>
                 </span>
                 <span style={{ display: "grid", justifyItems: "end", gap: 6 }}>
-                  <span style={{ color: appUi.text, fontSize: 16, fontWeight: 900 }}>{money(item.value)}</span>
-                  <span style={{ color: tc.text, fontSize: 12, fontWeight: 850 }}>{item.cta} →</span>
+                  <span style={{ color: tc.text, fontSize: 13, fontWeight: 900 }}>{item.cta} →</span>
+                  <span style={{ color: appUi.muted, fontSize: 12, fontWeight: 850 }}>{money(item.value)}</span>
                 </span>
               </Link>
             );

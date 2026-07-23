@@ -64,6 +64,7 @@ type EventRow = {
   last_action_type?: string | null;
   last_action_date?: string | null;
   event_financial_summary?: unknown;
+  is_demo?: boolean | null;
 };
 
 type EventActionRow = {
@@ -550,6 +551,10 @@ function isOptionalSchemaError(error: any) {
   );
 }
 
+function demoFilteredRows<T extends { is_demo?: boolean | null }>(rows: T[], demoMode: boolean) {
+  return demoMode ? rows.filter((row) => row.is_demo === true) : rows.filter((row) => row.is_demo !== true);
+}
+
 async function optionalDeleteQuery(query: any, label: string) {
   const result = await query;
   if (result?.error && !isOptionalSchemaError(result.error)) {
@@ -608,7 +613,7 @@ function actionTone(tone: DashboardAction["tone"]) {
 }
 
 function paymentTrackingHref(eventId: string) {
-  return `/app?trackPayment=${encodeURIComponent(eventId)}`;
+  return `/app?register=1&trackPayment=${encodeURIComponent(eventId)}`;
 }
 
 function registerActionFor(event: EventRow) {
@@ -1116,6 +1121,7 @@ function AppHomeContent() {
   const searchParams = useSearchParams();
   const trackingTargetId = searchParams.get("trackPayment");
   const registerRequested = searchParams.get("register") === "1";
+  const forceOnboardingRequested = searchParams.get("onboarding") === "1";
   const trackingTargetRef = useRef<HTMLDivElement | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [eventActions, setEventActions] = useState<EventActionRow[]>([]);
@@ -1135,6 +1141,55 @@ function AppHomeContent() {
   const [focusProgress, setFocusProgress] = useState<FocusProgress | null>(null);
   const [focusLoading, setFocusLoading] = useState(false);
   const [activationState, setActivationState] = useState<OnboardingState | null>(null);
+  const [demoModeActive, setDemoModeActive] = useState(false);
+  const [forceOnboarding, setForceOnboarding] = useState(false);
+
+  useEffect(() => {
+    function syncDemoMode() {
+      try {
+        setDemoModeActive(localStorage.getItem("cc.demo.mode") === "1");
+      } catch {
+        setDemoModeActive(false);
+      }
+    }
+    syncDemoMode();
+    window.addEventListener("cc:demo-mode-changed", syncDemoMode);
+    window.addEventListener("storage", syncDemoMode);
+    return () => {
+      window.removeEventListener("cc:demo-mode-changed", syncDemoMode);
+      window.removeEventListener("storage", syncDemoMode);
+    };
+  }, []);
+
+  useEffect(() => {
+    function syncForceOnboarding() {
+      try {
+        const requested = forceOnboardingRequested || localStorage.getItem("cc.force.onboarding") === "1";
+        if (forceOnboardingRequested) localStorage.setItem("cc.force.onboarding", "1");
+        setForceOnboarding(requested);
+      } catch {
+        setForceOnboarding(forceOnboardingRequested);
+      }
+    }
+    syncForceOnboarding();
+    window.addEventListener("storage", syncForceOnboarding);
+    window.addEventListener("cc:force-onboarding-changed", syncForceOnboarding);
+    return () => {
+      window.removeEventListener("storage", syncForceOnboarding);
+      window.removeEventListener("cc:force-onboarding-changed", syncForceOnboarding);
+    };
+  }, [forceOnboardingRequested]);
+
+  function handleActivationStateChange(state: OnboardingState) {
+    setActivationState(state);
+    if (state === "COMPLETE") {
+      try {
+        localStorage.removeItem("cc.force.onboarding");
+        window.dispatchEvent(new Event("cc:force-onboarding-changed"));
+      } catch {}
+      setForceOnboarding(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -1147,7 +1202,7 @@ function AppHomeContent() {
         // Keep the dashboard resilient while preserving the new notice-risk fields.
         const trackingColumns = "payment_status,submitted_date,expected_payment_date,submitted_amount,assessed_amount,paid_amount,disallowed_amount,balance_outstanding,last_chased_date,next_chase_date,client_response,dispute_reason,agreed_payment_date,last_action_type,last_action_date";
         const eventSelects = [
-          `id,title,status,created_at,contract_type,event_number,event_reference,project_name,main_contractor,event_date,notice_period_days,notification_deadline,${trackingColumns},event_financial_summary`,
+          `id,title,status,created_at,contract_type,event_number,event_reference,project_name,main_contractor,event_date,notice_period_days,notification_deadline,${trackingColumns},event_financial_summary,is_demo`,
           `id,title,status,created_at,contract_type,event_number,event_reference,project_name,main_contractor,event_date,notice_period_days,notification_deadline,${trackingColumns}`,
           "id,title,status,created_at,contract_type,event_number,event_reference,project_name,main_contractor,event_date,notice_period_days,notification_deadline,payment_status,submitted_date,expected_payment_date,last_action_type,last_action_date,event_financial_summary",
           "id,title,status,created_at,contract_type,event_number,event_reference,project_name,main_contractor,event_date,notice_period_days,notification_deadline,payment_status,submitted_date,expected_payment_date,last_action_type,last_action_date",
@@ -1175,14 +1230,14 @@ function AppHomeContent() {
 
           lastError = result.error;
           const message = String(result.error.message || "");
-          const canTryFallback = /event_date|notice_period_days|notification_deadline|payment_status|submitted_date|expected_payment_date|submitted_amount|assessed_amount|paid_amount|disallowed_amount|balance_outstanding|last_chased_date|next_chase_date|client_response|dispute_reason|agreed_payment_date|last_action_type|last_action_date|event_financial_summary|schema cache|relationship/i.test(message);
+          const canTryFallback = /event_date|notice_period_days|notification_deadline|payment_status|submitted_date|expected_payment_date|submitted_amount|assessed_amount|paid_amount|disallowed_amount|balance_outstanding|last_chased_date|next_chase_date|client_response|dispute_reason|agreed_payment_date|last_action_type|last_action_date|event_financial_summary|is_demo|schema cache|relationship/i.test(message);
           if (!canTryFallback) throw result.error;
         }
 
         if (lastError && rows === null) throw lastError;
 
         if (!active) return;
-        const eventRows = (rows ?? []) as EventRow[];
+        const eventRows = demoFilteredRows((rows ?? []) as EventRow[], demoModeActive);
         setEvents(eventRows);
 
         const actionRows = await (supabase as any)
@@ -1233,7 +1288,7 @@ function AppHomeContent() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [demoModeActive]);
 
   useEffect(() => {
     if (!trackingTargetId) return;
@@ -1948,6 +2003,12 @@ function AppHomeContent() {
     const nextTitle = renameValue.trim();
     if (!nextTitle) return;
 
+    if (demoModeActive) {
+      setEvents((prev) => prev.map((e) => (e.id === eventId ? { ...e, title: nextTitle } : e)));
+      cancelRename();
+      return;
+    }
+
     try {
       setRenameSavingId(eventId);
       const supabase = supabaseBrowser();
@@ -1967,6 +2028,16 @@ function AppHomeContent() {
     const nextProject = rawValue.trim() || null;
     if ((event.project_name ?? null) === nextProject) return;
     const previous = event;
+
+    if (demoModeActive) {
+      setEvents((prev) => prev.map((e) => (e.id === event.id ? { ...e, project_name: nextProject } : e)));
+      setProjectMoveValues((prev) => {
+        const next = { ...prev };
+        delete next[event.id];
+        return next;
+      });
+      return;
+    }
 
     try {
       setProjectMoveSavingId(event.id);
@@ -2016,6 +2087,12 @@ function AppHomeContent() {
 
   async function deleteRegisterEvent(event: EventRow) {
     if (deleteConfirmValue.trim().toLowerCase() !== "delete") return;
+
+    if (demoModeActive) {
+      setDeleteConfirmEventId(null);
+      setDeleteConfirmValue("");
+      return;
+    }
 
     const previousEvents = events;
 
@@ -2145,6 +2222,8 @@ function AppHomeContent() {
 
     setEvents((prev) => prev.map((e) => (e.id === eventId ? { ...e, ...patch } : e)));
 
+    if (demoModeActive) return;
+
     try {
       const supabase = supabaseBrowser();
       const user = await getRequiredUser(supabase);
@@ -2187,10 +2266,12 @@ function AppHomeContent() {
     }
   }
 
-  if (!registerRequested && !loading && events.length === 0 && activationState !== "COMPLETE") {
+  const shouldShowOnboarding = forceOnboarding || (!demoModeActive && !registerRequested && !loading && events.length === 0 && activationState !== "COMPLETE");
+
+  if (shouldShowOnboarding) {
     return (
       <div style={{ background: appUi.bg, minHeight: "100vh" }}>
-        <OnboardingActivationDashboard onStateChange={setActivationState} />
+        <OnboardingActivationDashboard forceStart={forceOnboarding} onStateChange={handleActivationStateChange} />
       </div>
     );
   }
@@ -2316,7 +2397,10 @@ function AppHomeContent() {
                         <span style={{ color: appUi.text, fontSize: 12.5, lineHeight: 1.25, fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{action.eyebrow}</span>
                         <span style={{ color: appUi.muted, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{action.title}</span>
                       </span>
-                      <span style={{ color: tc.text, fontSize: 12.5, fontWeight: 850 }}>{action.value !== null ? money(action.value) : action.cta}</span>
+                      <span style={{ display: "grid", justifyItems: "end", gap: 4, minWidth: 78 }}>
+                        <span style={{ color: tc.text, fontSize: 12.5, fontWeight: 900, whiteSpace: "nowrap" }}>{action.cta} →</span>
+                        <span style={{ color: appUi.muted, fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>{action.value !== null ? money(action.value) : "Value TBC"}</span>
+                      </span>
                     </Link>
                   );
                 })}
@@ -2403,12 +2487,13 @@ function AppHomeContent() {
                 width: "100%",
                 height: 46,
                 borderRadius: 14,
-                border: `1px solid ${c.border}`,
-                background: c.input,
-                color: c.black,
-                fontWeight: 650,
+                border: `1px solid ${toneColours("purple").border}`,
+                background: toneColours("purple").bg,
+                color: appUi.purple,
+                fontWeight: 800,
                 fontSize: 13,
                 cursor: "pointer",
+                boxShadow: "0 1px 2px rgba(109,74,255,0.08)",
               }}
             >
               {showAll ? "Close CE register" : "Open CE register"}
@@ -2457,19 +2542,58 @@ function AppHomeContent() {
                           const rowBalance = balanceOutstanding(row.event, row.value);
                           const paymentDisplayTone = isOverdueCe(row.event) ? actionTone("red") : paymentTone(row.event.payment_status);
                           const showNoticeBadge = !voided && !isSubmittedOrAccepted(row.event.status) && !isCommerciallyClosed(row.event.status, row.event.payment_status);
+                          const recoveryControlTone =
+                            voided || isCommerciallyClosed(row.event.status, row.event.payment_status)
+                              ? "green"
+                              : row.event.status === "rejected" || isOverdueCe(row.event)
+                              ? "red"
+                              : isUnpaidCe(row.status, row.event.payment_status)
+                              ? "blue"
+                              : showNoticeBadge && row.timeRisk.state !== "safe"
+                              ? "orange"
+                              : "purple";
+                          const recoveryControlColours = toneColours(recoveryControlTone);
+                          const recoveryControlLabel =
+                            voided
+                              ? "Audit record"
+                              : isCommerciallyClosed(row.event.status, row.event.payment_status)
+                              ? "Recovery closed"
+                              : row.event.status === "rejected"
+                              ? "Rebuttal required"
+                              : isOverdueCe(row.event)
+                              ? "Payment overdue"
+                              : isUnpaidCe(row.status, row.event.payment_status)
+                              ? "Payment follow-up"
+                              : showNoticeBadge && row.timeRisk.state !== "safe"
+                              ? "Notice action"
+                              : "Recovery control";
+                          const recoveryControlDetail =
+                            voided
+                              ? "This CE / VO is void and kept for audit only. It is excluded from live recovery totals."
+                              : isCommerciallyClosed(row.event.status, row.event.payment_status)
+                              ? "Paid and commercially closed. Keep the record for audit, but no recovery action is needed."
+                              : row.event.status === "rejected"
+                              ? "Prepare the rebuttal position and address the reason the CE / VO has been rejected or discounted."
+                              : isOverdueCe(row.event)
+                              ? "The expected payment date has passed. Chase the outstanding value and record the response."
+                              : isUnpaidCe(row.status, row.event.payment_status)
+                              ? "Submitted or accepted value is still unpaid. Keep the follow-up dates and client response current."
+                              : showNoticeBadge && row.timeRisk.state !== "safe"
+                              ? "The notice position needs attention before the opportunity weakens."
+                              : "Track assessment, chase dates, short payment and recovery action without changing the client-facing narrative.";
                           return (
                             <div
                               key={row.event.id}
                               ref={isTrackingTarget ? trackingTargetRef : null}
                               style={{
-                                border: `1px solid ${isTrackingTarget ? c.blueBd : c.border}`,
+                                border: `1px solid ${isTrackingTarget ? toneColours("purple").border : c.border}`,
                                 borderRadius: isExpanded ? 20 : 16,
                                 padding: isExpanded ? 16 : "10px 12px",
-                                background: voided ? c.soft : isTrackingTarget ? c.softBlue : c.card,
+                                background: voided ? c.soft : c.card,
                                 display: "grid",
                                 gap: isExpanded ? 14 : 0,
                                 opacity: voided ? 0.68 : 1,
-                                boxShadow: isTrackingTarget ? "0 0 0 3px rgba(37,99,235,0.08)" : "none",
+                                boxShadow: isTrackingTarget ? "0 0 0 3px rgba(109,74,255,0.08), 0 18px 46px rgba(15,23,42,0.06)" : "none",
                                 transition: "background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, opacity 160ms ease",
                               }}
                             >
@@ -2498,9 +2622,9 @@ function AppHomeContent() {
                             borderRadius: 999,
                             display: "grid",
                             placeItems: "center",
-                            border: `1px solid ${isExpanded ? c.blueBd : c.border}`,
-                            background: isExpanded ? c.blueBg : c.input,
-                            color: isExpanded ? c.blueTx : c.sub,
+                            border: `1px solid ${isExpanded ? toneColours("purple").border : c.border}`,
+                            background: isExpanded ? toneColours("purple").bg : c.input,
+                            color: isExpanded ? appUi.purple : c.sub,
                             fontSize: 12,
                             fontWeight: 800,
                             transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
@@ -2513,6 +2637,21 @@ function AppHomeContent() {
                           {displayEventTitle(row.event)}
                         </span>
                         <span style={{ display: "flex", gap: 7, alignItems: "center", justifyContent: "flex-end", minWidth: 0, whiteSpace: "nowrap" }}>
+                          <span
+                            title={row.value === null ? "CE value not calculated yet" : `CE value ${fullMoney(row.value)}`}
+                            style={{
+                              padding: "5px 9px",
+                              borderRadius: 999,
+                              border: `1px solid ${row.value === null ? c.border : toneColours("purple").border}`,
+                              background: row.value === null ? c.input : toneColours("purple").bg,
+                              color: row.value === null ? c.sub : appUi.purple,
+                              fontSize: 11.5,
+                              lineHeight: 1,
+                              fontWeight: 800,
+                            }}
+                          >
+                            {row.value === null ? "Value TBC" : money(row.value)}
+                          </span>
                           <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${st.bd}`, background: st.bg, color: st.tx, fontSize: 11.5, lineHeight: 1, fontWeight: 700 }}>
                             {getCommercialStatusLabel(row.event.status)}
                           </span>
@@ -2530,7 +2669,7 @@ function AppHomeContent() {
                       </button>
                       {isExpanded ? (
                         <>
-                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 16, alignItems: "start" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 16, alignItems: "start", padding: "6px 2px 2px" }}>
                         <div style={{ minWidth: 0 }}>
                           {renamingId === row.event.id ? (
                             <div style={{ display: "flex", gap: 8 }}>
@@ -2544,7 +2683,7 @@ function AppHomeContent() {
                             </div>
                           ) : (
                             <>
-                              <Link href={`/app/event/${row.event.id}`} style={{ color: voided ? c.sub : c.text, textDecoration: "none", fontSize: 15, fontWeight: 650, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              <Link href={`/app/event/${row.event.id}`} style={{ color: voided ? c.sub : c.text, textDecoration: "none", fontSize: 16, fontWeight: 800, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: 0 }}>
                                 {displayEventTitle(row.event)}
                               </Link>
                               <div style={{ marginTop: 5, fontSize: 12.5, color: c.sub, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", lineHeight: 1.45 }}>
@@ -2563,7 +2702,7 @@ function AppHomeContent() {
                               Add value →
                             </Link>
                           ) : (
-                            <div style={{ fontSize: 16, fontWeight: 650, color: c.text }}>{fullMoney(row.value)}</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: appUi.purple }}>{fullMoney(row.value)}</div>
                           )}
                           <div style={{ display: "flex", gap: 7, flexWrap: "wrap", justifyContent: "flex-end" }}>
                             <span style={{ padding: "5px 9px", borderRadius: 999, border: `1px solid ${st.bd}`, background: st.bg, color: st.tx, fontSize: 11.5, fontWeight: 650 }}>
@@ -2583,18 +2722,66 @@ function AppHomeContent() {
                         </div>
                       </div>
 
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                          gap: 10,
+                        }}
+                      >
+                        {[
+                          ["CE value", row.value === null ? "Value TBC" : fullMoney(row.value), "purple"],
+                          ["Balance outstanding", fullMoney(rowBalance), rowBalance > 0 ? "orange" : "green"],
+                          ["Commercial status", getCommercialStatusLabel(row.event.status), voided ? "neutral" : st.tx === c.redTx ? "red" : st.tx === c.greenTx ? "green" : "blue"],
+                          ["Payment position", isOverdueCe(row.event) ? "Overdue" : getPaymentStatusLabel(row.event.payment_status), isOverdueCe(row.event) ? "red" : rowBalance > 0 ? "orange" : "green"],
+                        ].map(([label, value, tone]) => {
+                          const tc = toneColours(tone as "purple" | "orange" | "green" | "blue" | "red" | "neutral");
+                          return (
+                            <div key={label} style={{ border: `1px solid ${tc.border}`, background: tc.bg, borderRadius: 16, padding: "12px 13px", minHeight: 72, display: "grid", alignContent: "space-between", gap: 7 }}>
+                              <span style={{ color: c.sub, fontSize: 11, lineHeight: 1, fontWeight: 850, textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</span>
+                              <span style={{ color: tc.text, fontSize: 15, lineHeight: 1.15, fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+
                       <details
                         open={isTrackingTarget}
                         onToggle={(e) => {
                           const isOpen = e.currentTarget.open;
                           setOpenTrackingId(isOpen ? row.event.id : openTrackingId === row.event.id ? null : openTrackingId);
                         }}
-                        style={{ borderTop: `1px solid ${isTrackingTarget ? c.blueBd : c.border}`, paddingTop: 12 }}
+                        style={{
+                          borderTop: `1px solid ${toneColours("purple").border}`,
+                          paddingTop: 12,
+                          display: "grid",
+                          gap: 12,
+                        }}
                       >
-                        <summary style={{ cursor: "pointer", color: isTrackingTarget ? c.blueTx : c.sub, fontSize: 12.5, fontWeight: 650, listStyle: "none" }}>
+                        <summary style={{ cursor: "pointer", color: appUi.purple, fontSize: 12.5, fontWeight: 850, listStyle: "none" }}>
                           {isTrackingTarget ? "Managing payment tracking ▴" : "Manage tracking ▾"}
                         </summary>
-                        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>
+                        <div style={{ display: "grid", gap: 12 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", border: `1px solid ${recoveryControlColours.border}`, background: recoveryControlColours.bg, borderRadius: 16, padding: "12px 14px" }}>
+                            <div>
+                              <div style={{ color: recoveryControlColours.text, fontSize: 12, fontWeight: 850, textTransform: "uppercase", letterSpacing: ".04em" }}>{recoveryControlLabel}</div>
+                              <div style={{ color: c.sub, fontSize: 12.5, lineHeight: 1.45, marginTop: 3 }}>{recoveryControlDetail}</div>
+                            </div>
+                            {primaryAction.label === "Track payment" ? (
+                              <button
+                                type="button"
+                                style={{ height: 40, border: `1px solid ${recoveryControlColours.text}`, background: recoveryControlColours.text, color: recoveryControlTone === "orange" || recoveryControlTone === "green" ? "#07111d" : "#fff", borderRadius: 12, padding: "0 16px", fontWeight: 800, cursor: "default", whiteSpace: "nowrap" }}
+                              >
+                                Tracker open
+                              </button>
+                            ) : (
+                              <Link href={primaryAction.href} style={{ textDecoration: "none", display: "inline-flex", flex: "0 0 auto" }}>
+                                <button style={{ height: 40, border: `1px solid ${recoveryControlColours.text}`, background: recoveryControlColours.text, color: recoveryControlTone === "orange" || recoveryControlTone === "green" ? "#07111d" : "#fff", borderRadius: 12, padding: "0 16px", fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>{primaryAction.label}</button>
+                              </Link>
+                            )}
+                          </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>
                           <label style={{ display: "grid", gap: 6 }}>
                             <span style={{ fontSize: 11.5, fontWeight: 650, color: c.sub }}>CE status</span>
                             <select
@@ -2865,13 +3052,8 @@ function AppHomeContent() {
                               </>
                             )}
                             <button onClick={() => startRename(row.event)} style={{ height: 40, border: `1px solid ${c.border}`, background: c.input, color: c.text, borderRadius: 12, padding: "0 14px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}>Rename</button>
-                            <Link href={primaryAction.href} style={{ textDecoration: "none", display: "inline-flex" }}>
-                              <button style={{ height: 40, border: `1px solid ${c.black}`, background: c.black, color: c.blackContrast, borderRadius: 12, padding: "0 16px", fontWeight: 650, cursor: "pointer", whiteSpace: "nowrap" }}>{primaryAction.label}</button>
-                            </Link>
                           </div>
                         </div>
-                        <div style={{ marginTop: 10, fontSize: 12, color: c.sub, lineHeight: 1.45 }}>
-                          Tracking stays internal. It powers the dashboard and does not change the client-facing Excel narrative.
                         </div>
                       </details>
                         </>

@@ -43,7 +43,12 @@ type EwnRow = {
   evidence_summary?: string | null;
   generated_output?: { narrative?: string } | null;
   converted_event_id?: string | null;
+  is_demo?: boolean | null;
 };
+
+function demoFilteredRows<T extends { is_demo?: boolean | null }>(rows: T[], demoMode: boolean) {
+  return demoMode ? rows.filter((row) => row.is_demo === true) : rows.filter((row) => row.is_demo !== true);
+}
 
 function statusStyle(status?: string | null) {
   if (status === "converted") return { bg: c.greenBg, bd: c.greenBorder, tx: c.greenText, label: "Converted" };
@@ -94,11 +99,29 @@ function EwnRegisterInner() {
   const [projectFilter, setProjectFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
   const [page, setPage] = useState(1);
+  const [demoModeActive, setDemoModeActive] = useState(false);
   const pageSize = 6;
 
   useEffect(() => {
     setOpenId(selectedId);
   }, [selectedId]);
+
+  useEffect(() => {
+    function syncDemoMode() {
+      try {
+        setDemoModeActive(localStorage.getItem("cc.demo.mode") === "1");
+      } catch {
+        setDemoModeActive(false);
+      }
+    }
+    syncDemoMode();
+    window.addEventListener("cc:demo-mode-changed", syncDemoMode);
+    window.addEventListener("storage", syncDemoMode);
+    return () => {
+      window.removeEventListener("cc:demo-mode-changed", syncDemoMode);
+      window.removeEventListener("storage", syncDemoMode);
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -109,7 +132,7 @@ function EwnRegisterInner() {
         const { data } = await supabase.auth.getSession();
         const user = data.session?.user;
         if (!user) {
-          if (active) setEwns(readLocalEwns());
+          if (active) setEwns(demoModeActive ? [] : readLocalEwns());
           return;
         }
         const res = await (supabase as any).from("ewns")
@@ -117,7 +140,8 @@ function EwnRegisterInner() {
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
         if (!active) return;
-        setEwns(res.error ? readLocalEwns() : ([...((res.data ?? []) as EwnRow[]), ...readLocalEwns()]));
+        const localEwns = demoModeActive ? [] : readLocalEwns();
+        setEwns(res.error ? localEwns : ([...demoFilteredRows((res.data ?? []) as EwnRow[], demoModeActive), ...localEwns]));
       } finally {
         if (active) setLoading(false);
       }
@@ -126,7 +150,7 @@ function EwnRegisterInner() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [demoModeActive]);
 
   const projectOptions = useMemo(() => {
     const names = new Set<string>();
@@ -266,6 +290,15 @@ function EwnRegisterInner() {
 
     setEwns((prev) => prev.map((item) => (item.id === ewn.id ? { ...item, ...patch } : item)));
 
+    if (demoModeActive) {
+      setEditValues((prev) => {
+        const next = { ...prev };
+        delete next[ewn.id];
+        return next;
+      });
+      return;
+    }
+
     try {
       setEditSavingId(ewn.id);
       const supabase = supabaseBrowser();
@@ -309,6 +342,8 @@ function EwnRegisterInner() {
     const previous = ewn;
     setEwns((prev) => prev.map((item) => (item.id === ewn.id ? { ...item, status: nextStatus } : item)));
 
+    if (demoModeActive) return;
+
     try {
       setStatusSavingId(ewn.id);
       const supabase = supabaseBrowser();
@@ -338,6 +373,15 @@ function EwnRegisterInner() {
     const previous = ewn;
 
     setEwns((prev) => prev.map((item) => (item.id === ewn.id ? { ...item, project_name: nextProject } : item)));
+
+    if (demoModeActive) {
+      setProjectMoveValues((prev) => {
+        const next = { ...prev };
+        delete next[ewn.id];
+        return next;
+      });
+      return;
+    }
 
     try {
       setProjectMoveSavingId(ewn.id);

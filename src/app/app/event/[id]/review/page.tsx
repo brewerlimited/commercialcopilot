@@ -16,6 +16,7 @@ import { getDraftTemplateForContractType } from "@/lib/draftTemplates";
 import { recalculateEventFinancialSummary } from "@/lib/financialSummary";
 import { getCommercialStatusLabel, normaliseCommercialStatus } from "@/lib/commercialControl";
 import { trackAnalyticsWithUser } from "@/lib/analyticsClient";
+import { downloadDemoCeWorkbook } from "@/lib/demoWorkbook";
 
 type Unit = "day" | "week";
 
@@ -523,6 +524,7 @@ function ReviewPageContent() {
   const [isAdminUnlimited, setIsAdminUnlimited] = useState(false);
   const [generationAllowed, setGenerationAllowed] = useState(false);
   const [generationGateMessage, setGenerationGateMessage] = useState<string | null>(null);
+  const [demoModeActive, setDemoModeActive] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [showReadinessDetails, setShowReadinessDetails] = useState(false);
   const [generatedCommercialPushback, setGeneratedCommercialPushback] = useState<Array<{ heading: string; note: string }>>([]);
@@ -539,6 +541,24 @@ function ReviewPageContent() {
       setShowRebuttalPanel(true);
     }
   }, [initialMode, commercialStatus]);
+
+  useEffect(() => {
+    const syncDemoMode = () => {
+      try {
+        setDemoModeActive(localStorage.getItem("cc.demo.mode") === "1");
+      } catch {
+        setDemoModeActive(false);
+      }
+    };
+
+    syncDemoMode();
+    window.addEventListener("storage", syncDemoMode);
+    window.addEventListener("cc:demo-mode-changed", syncDemoMode as EventListener);
+    return () => {
+      window.removeEventListener("storage", syncDemoMode);
+      window.removeEventListener("cc:demo-mode-changed", syncDemoMode as EventListener);
+    };
+  }, []);
 
   const lastSavedSnapshotRef = useRef<string>("");
   const [lastSavedSnapshot, setLastSavedSnapshot] = useState("");
@@ -592,6 +612,25 @@ function ReviewPageContent() {
     setGenerationProgress(100);
     setGenerationDownloadReady(true);
     await new Promise((resolve) => window.setTimeout(resolve, 450));
+  }
+
+  async function finishDemoGenerationProgress() {
+    clearGenerationProgressTimer();
+    setGenerationDownloadReady(false);
+    setGenerationEta("Preparing demo workbook…");
+
+    const perStageMs = 10000 / PACK_GENERATION_STAGES.length;
+    for (let i = 0; i < PACK_GENERATION_STAGES.length; i += 1) {
+      setGenerationStage(PACK_GENERATION_STAGES[i]);
+      setGenerationProgress(Math.min(94, Math.round(((i + 0.35) / PACK_GENERATION_STAGES.length) * 94)));
+      setGenerationEta(`${Math.max(1, Math.ceil(((PACK_GENERATION_STAGES.length - i) * perStageMs) / 1000))}s remaining`);
+      await new Promise((resolve) => window.setTimeout(resolve, perStageMs));
+    }
+
+    setGenerationStage("Submission completed");
+    setGenerationEta("Ready to download");
+    setGenerationProgress(100);
+    setGenerationDownloadReady(true);
   }
 
   useEffect(() => {
@@ -816,8 +855,16 @@ function ReviewPageContent() {
   const billingGatePending = !billingGateLoaded && !packReady;
   const generationCreditLocked = billingGateLoaded && !isAdminUnlimited && generationAllowed && creditsRemaining <= 0 && !packReady;
   const activationLocked = billingGateLoaded && !isAdminUnlimited && !generationAllowed && !packReady;
-  const generateDisabled = !packReady && (blockers > 0 || isGenerating || billingGatePending || activationLocked || generationCreditLocked);
-  const generateButtonLabel = effectiveForceGenerateMode ? "Produce recovery pack" : isGenerating
+  const generateDisabled = demoModeActive
+    ? isGenerating
+    : !packReady && (blockers > 0 || isGenerating || billingGatePending || activationLocked || generationCreditLocked);
+  const generateButtonLabel = demoModeActive
+    ? isGenerating
+      ? "Preparing demo pack…"
+      : generationDownloadReady
+      ? "Download demo pack"
+      : "Produce demo pack"
+    : effectiveForceGenerateMode ? "Produce recovery pack" : isGenerating
     ? "Generating…"
     : billingGatePending
     ? "Checking billing…"
@@ -1510,6 +1557,11 @@ function ReviewPageContent() {
   }
 
   async function handleDownloadPack() {
+    if (demoModeActive) {
+      await downloadDemoCeWorkbook();
+      return true;
+    }
+
     if (!eventId || !isUuid(eventId)) return false;
 
     setSaveErr(null);
@@ -1588,6 +1640,27 @@ function ReviewPageContent() {
 
   async function handleGeneratePack() {
     if (!eventId || !isUuid(eventId)) return;
+
+    if (demoModeActive) {
+      setIsGenerating(true);
+      setSaveErr(null);
+      setGenerationDownloadReady(false);
+      setGenerationProgress(3);
+      setGenerationStage(PACK_GENERATION_STAGES[0]);
+      setGenerationEta("10s remaining");
+      try {
+        await finishDemoGenerationProgress();
+      } catch (e: any) {
+        clearGenerationProgressTimer();
+        setGenerationProgress(0);
+        setGenerationStage("Preparing generation…");
+        setGenerationDownloadReady(false);
+        setSaveErr(e?.message ?? "Failed to prepare demo pack");
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
 
     // Read Force Generate at click-time instead of trusting potentially stale
     // React state. This is critical because packReady/download branching happens
@@ -1821,11 +1894,13 @@ function ReviewPageContent() {
             }}
           >
             <div style={{ fontSize: 22, fontWeight: 700, color: c.black }}>
-              {generationDownloadReady ? "Recovery pack ready" : "Generating recovery pack"}
+              {generationDownloadReady ? "Recovery pack ready" : demoModeActive ? "Preparing demo pack" : "Generating recovery pack"}
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.6, color: c.sub, marginTop: 8 }}>
               {generationDownloadReady
                 ? "The submission has been completed and the workbook is ready to download."
+                : demoModeActive
+                ? "Demo mode uses temporary edits and downloads a pre-generated CE workbook. No changes are saved and no generation credits are used."
                 : "Building the commercial position, valuation support and submission workbook."}
             </div>
             <div style={{ marginTop: 18, height: 10, borderRadius: 999, overflow: "hidden", background: c.lightGrey }}>

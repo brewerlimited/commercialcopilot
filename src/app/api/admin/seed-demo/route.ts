@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { getAuthUserFromRequest } from "@/lib/apiAuth";
 import { checkAdminWithServiceRole, normalizeEmail } from "@/lib/adminAccess";
+import { isAccountApproved, isSubscriptionActive } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -1074,13 +1075,41 @@ export async function POST(req: NextRequest) {
   try {
     const adminUser = await getAuthUserFromRequest(req);
     if (!adminUser?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (!(await isAdminEmail(adminUser.email))) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
     const body = await req.json().catch(() => ({}));
     const targetEmail = normalizeEmail(body?.targetEmail || body?.email || adminUser.email);
     if (!targetEmail) return NextResponse.json({ error: "Missing target email" }, { status: 400 });
 
     const admin = supabaseAdmin() as any;
+    const adminEmail = normalizeEmail(adminUser.email);
+    const adminAllowed = await isAdminEmail(adminUser.email);
+    const selfDemoSeed = body?.demoMode === true && targetEmail === adminEmail;
+
+    if (!adminAllowed) {
+      if (!selfDemoSeed) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+      const profileRes = await (admin as any)
+        .from("profiles")
+        .select("account_status,subscription_status,is_admin_unlimited")
+        .eq("id", adminUser.id)
+        .maybeSingle();
+
+      if (profileRes.error) throw profileRes.error;
+
+      const profile = profileRes.data || {};
+      const trialAllowed =
+        Boolean(profile.is_admin_unlimited) ||
+        isAccountApproved(profile.account_status) ||
+        isSubscriptionActive(profile.subscription_status);
+
+      if (!trialAllowed) {
+        return NextResponse.json(
+          { error: "Demo mode is only available once your trial access has been approved." },
+          { status: 403 }
+        );
+      }
+    }
+
     const users = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
     if (users.error) throw users.error;
     const target = ((users.data as { users?: Array<{ id?: string; email?: string | null }> } | null)?.users ?? []).find((u: { id?: string; email?: string | null }) => normalizeEmail(u.email) === targetEmail);
@@ -1150,14 +1179,21 @@ export async function POST(req: NextRequest) {
             main_contractor: event.main_contractor,
             contract_type: event.contract_type,
             status: "live",
+            is_demo: true,
             updated_at: now,
           },
         ])
       ).values()
     );
-    const projectInsert = await (admin as any).from("projects")
+    let projectInsert = await (admin as any).from("projects")
       .upsert(demoProjects, { onConflict: "user_id,project_name,main_contractor" })
       .select("id,project_name,main_contractor");
+    if (projectInsert.error && isMissingColumn(projectInsert.error, "is_demo")) {
+      const legacyDemoProjects = demoProjects.map(({ is_demo, ...project }) => project);
+      projectInsert = await (admin as any).from("projects")
+        .upsert(legacyDemoProjects, { onConflict: "user_id,project_name,main_contractor" })
+        .select("id,project_name,main_contractor");
+    }
     if (projectInsert.error) throw new Error(`Demo seed failed while creating projects: ${describeSupabaseError(projectInsert.error)}`);
     const projectIds = new Map<string, string>(
       (projectInsert.data || []).map((project: { id: string; project_name: string; main_contractor?: string | null }) => [
@@ -1194,14 +1230,20 @@ export async function POST(req: NextRequest) {
         last_action_date: e.last_action_date,
         delay_days: e.delay_days,
         event_financial_summary: summary,
+        is_demo: true,
         created_at: `${e.event_date}T09:00:00.000Z`,
         updated_at: now,
       };
     });
 
-    let eventsInsert = await trySeedInsert(admin, "events", eventRows, "events");
+    let activeEventRows: any[] = eventRows;
+    let eventsInsert = await trySeedInsert(admin, "events", activeEventRows, "events");
+    if (eventsInsert.error && isMissingColumn(eventsInsert.error, "is_demo")) {
+      activeEventRows = eventRows.map(({ is_demo, ...row }) => row);
+      eventsInsert = await trySeedInsert(admin, "events", activeEventRows, "events without is_demo");
+    }
     if (eventsInsert.error && isPaymentStatusConstraintError(eventsInsert.error)) {
-      const legacyEventRows = eventRows.map((row) => ({
+      const legacyEventRows = activeEventRows.map((row) => ({
         ...row,
         payment_status: row.payment_status === "submitted_for_payment" ? "applied" : row.payment_status,
       }));
@@ -1396,6 +1438,7 @@ export async function POST(req: NextRequest) {
         impact: ewn.impact,
         required_action: ewn.required_action,
         evidence_summary: ewn.evidence,
+        is_demo: true,
         created_at: `${ewn.event_date}T08:30:00.000Z`,
         updated_at: now,
       };
@@ -1411,6 +1454,7 @@ export async function POST(req: NextRequest) {
       "impact",
       "required_action",
       "evidence_summary",
+      "is_demo",
     ]);
     if (ewnInsert.error) throw ewnInsert.error;
 
@@ -1423,21 +1467,23 @@ export async function POST(req: NextRequest) {
       await optionalQuery((admin as any).from("event_packs").delete().in("event_id", seededEventIds).eq("user_id", target.id));
     }
 
-    await optionalQuery(trySeedUpsert(admin, "profiles", [{
-      id: target.id,
-      credits_remaining: 3,
-      ewn_credits_remaining: 20,
-      ewn_credits_limit: 20,
-      account_status: "trial_active",
-      approved_at: now,
-      updated_at: now,
-    }], { onConflict: "id" }, "profiles"));
+    if (adminAllowed) {
+      await optionalQuery(trySeedUpsert(admin, "profiles", [{
+        id: target.id,
+        credits_remaining: 3,
+        ewn_credits_remaining: 20,
+        ewn_credits_limit: 20,
+        account_status: "trial_active",
+        approved_at: now,
+        updated_at: now,
+      }], { onConflict: "id" }, "profiles"));
 
-    await optionalQuery(trySeedUpsert(admin, "user_credits", [{
-      user_id: target.id,
-      credits_remaining: 3,
-      updated_at: now,
-    }], { onConflict: "user_id" }, "user_credits"));
+      await optionalQuery(trySeedUpsert(admin, "user_credits", [{
+        user_id: target.id,
+        credits_remaining: 3,
+        updated_at: now,
+      }], { onConflict: "user_id" }, "user_credits"));
+    }
 
     const resourceCount = await (admin as any).from("event_resource_lines")
       .select("id", { count: "exact", head: true })

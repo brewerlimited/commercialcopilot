@@ -320,13 +320,20 @@ function GettingStartedSide({ state }: { state: OnboardingState }) {
   );
 }
 
-export function OnboardingActivationDashboard({ onStateChange }: { onStateChange?: (state: OnboardingState) => void }) {
+export function OnboardingActivationDashboard({
+  forceStart = false,
+  onStateChange,
+}: {
+  forceStart?: boolean;
+  onStateChange?: (state: OnboardingState) => void;
+}) {
   const router = useRouter();
   const projectNameRef = useRef<HTMLInputElement | null>(null);
+  const issueTitleRef = useRef<HTMLInputElement | null>(null);
   const issueRef = useRef<HTMLTextAreaElement | null>(null);
   const [loaded, setLoaded] = useState<LoadedState | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mode, setMode] = useState<"welcome" | "project" | "issue" | "workspace">("welcome");
+  const [mode, setMode] = useState<"welcome" | "project" | "title" | "issue" | "workspace">("welcome");
   const [projectDraft, setProjectDraft] = useState<OnboardingProjectDraft>(EMPTY_PROJECT_DRAFT);
   const [issueDraft, setIssueDraft] = useState<OnboardingIssueDraft>(EMPTY_ISSUE_DRAFT);
   const [optionalOpen, setOptionalOpen] = useState(false);
@@ -349,20 +356,31 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
       const loadedState = await loadOnboardingState(localProjectDraft, localIssueDraft);
       const nextProjectDraft = { ...localProjectDraft, ...(loadedState.prefs.projectDraft ?? {}) };
       const nextIssueDraft = { ...localIssueDraft, ...(loadedState.prefs.issueDraft ?? {}) };
-      const nextState = resolveOnboardingState({
+      const resolvedState = resolveOnboardingState({
         prefs: loadedState.prefs,
         projects: loadedState.projects,
         issues: loadedState.events,
         projectDraft: nextProjectDraft,
         issueDraft: nextIssueDraft,
       });
+      const nextState = forceStart ? "WELCOME" : resolvedState;
       const next = { ...loadedState, state: nextState };
       setProjectDraft(nextProjectDraft);
       setIssueDraft(nextIssueDraft);
       setLoaded(next);
       onStateChange?.(next.state);
-      setMode(next.state === "WELCOME" ? "welcome" : next.state.startsWith("PROJECT") ? "project" : next.state.startsWith("FIRST_ISSUE") ? "issue" : "workspace");
-      if (next.state === "WELCOME") void trackAnalyticsWithUser(initialSupabase, "onboarding_welcome_viewed", { current_onboarding_state: next.state });
+      setMode(
+        next.state === "WELCOME"
+          ? "welcome"
+          : next.state.startsWith("PROJECT")
+          ? "project"
+          : next.state.startsWith("FIRST_ISSUE")
+          ? nextIssueDraft.title.trim()
+            ? "issue"
+            : "title"
+          : "workspace"
+      );
+      if (next.state === "WELCOME") void trackAnalyticsWithUser(initialSupabase, "onboarding_welcome_viewed", { current_onboarding_state: next.state, forced: forceStart });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Could not load getting started";
       if (isAuthErrorMessage(msg)) {
@@ -378,10 +396,11 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
   useEffect(() => {
     void refreshState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onStateChange]);
+  }, [forceStart, onStateChange]);
 
   useEffect(() => {
     if (mode === "project") window.setTimeout(() => projectNameRef.current?.focus(), 50);
+    if (mode === "title") window.setTimeout(() => issueTitleRef.current?.focus(), 50);
     if (mode === "issue") window.setTimeout(() => issueRef.current?.focus(), 50);
   }, [mode]);
 
@@ -426,6 +445,39 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
 
   const selectedTrade = projectDraft.tradePackage === "Other" ? projectDraft.otherTrade || "Other" : projectDraft.tradePackage;
   const example = TRADE_EXAMPLES[projectDraft.tradePackage] ?? TRADE_EXAMPLES.Other;
+  const onboardingButtonBase: React.CSSProperties = {
+    minHeight: 48,
+    borderRadius: 15,
+    padding: "0 18px",
+    fontSize: 14,
+    fontWeight: 850,
+    letterSpacing: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    textDecoration: "none",
+  };
+  const purpleButtonStyle: React.CSSProperties = {
+    ...onboardingButtonBase,
+    border: "1px solid #ddd4ff",
+    background: appUi.purpleSoft,
+    color: appUi.purple,
+    boxShadow: "0 12px 28px rgba(109, 74, 255, 0.08)",
+  };
+  const darkButtonStyle: React.CSSProperties = {
+    ...onboardingButtonBase,
+    border: `1px solid ${appUi.navy}`,
+    background: appUi.navy,
+    color: appUi.navyText,
+    boxShadow: "0 14px 32px rgba(15, 23, 42, 0.14)",
+  };
+  const quietButtonStyle: React.CSSProperties = {
+    ...onboardingButtonBase,
+    border: `1px solid ${appUi.border}`,
+    background: appUi.surface,
+    color: appUi.text,
+  };
 
   async function dismissWelcome() {
     if (!loaded) return;
@@ -436,6 +488,38 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
     writeLocalDraft(onboardingStorageKey(loaded.userId, "welcomeDismissed"), { dismissedAt });
     void maybeUpsertOnboardingPrefs(loaded.userId, { welcome_dismissed_at: dismissedAt });
     void trackAnalyticsWithUser(supabaseBrowser(), "onboarding_skipped", { current_onboarding_state: loaded.state });
+  }
+
+  async function testDemoDashboard() {
+    if (!loaded) return;
+    setError(null);
+    setMessage("Preparing demo dashboard…");
+    try {
+      const supabase = supabaseBrowser();
+      const sessionRes = await supabase.auth.getSession();
+      const token = sessionRes.data.session?.access_token;
+      const email = sessionRes.data.session?.user?.email;
+      if (!token) throw new Error("Please sign in again before loading demo mode.");
+
+      const res = await fetch("/api/admin/seed-demo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ targetEmail: email, demoMode: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Demo dashboard could not be prepared.");
+
+      window.localStorage.setItem("cc.demo.mode", "1");
+      window.dispatchEvent(new Event("cc:demo-mode-changed"));
+      void trackAnalyticsWithUser(supabase, "demo_workspace_opened", { entry_source: "onboarding_welcome" });
+      router.push("/app");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Demo dashboard could not be prepared.");
+      setMessage(null);
+    }
   }
 
   async function saveProject() {
@@ -502,7 +586,7 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
         projects: [created, ...loaded.projects.filter((project) => project.id !== created.id)],
         state: "FIRST_ISSUE",
       });
-      setMode("issue");
+      setMode("title");
       setMessage(`✓ ${cleanProject} created`);
       void trackAnalyticsWithUser(supabase, "onboarding_project_created", {
         project_id: created.id,
@@ -526,6 +610,12 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
       return;
     }
     const description = issueDraft.description.trim();
+    const cleanTitle = cleanName(issueDraft.title);
+    if (!cleanTitle) {
+      setMode("title");
+      setError("Add a short CE / VO title before saving the issue.");
+      return;
+    }
     if (!hasMeaningfulIssueText(description)) {
       setError("Add one clear sentence describing what happened.");
       return;
@@ -551,7 +641,7 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
       const capturedAt = new Date().toISOString();
       const basePayload = {
         user_id: loaded.userId,
-        title: titleFromIssue(description),
+        title: cleanTitle || titleFromIssue(description),
         project_id: project.id,
         project_name: project.project_name || issueDraft.projectName,
         main_contractor: project.main_contractor || "",
@@ -578,10 +668,26 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
       }
       if (insertRes.error) throw insertRes.error;
       const event = insertRes.data as EventRow;
+      const basisRes = await (supabase as any).from("event_basis").upsert(
+        {
+          event_id: event.id,
+          happened_summary: description,
+          cause_type: null,
+          cause_summary: "",
+          difference_from_plan: "",
+          mechanism_tags: [],
+          time_impact_toggle: "unsure",
+          mitigation_summary: "",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "event_id" }
+      );
+      if (basisRes.error && !optionalColumnPattern.test(String(basisRes.error.message || ""))) throw basisRes.error;
       const completedAt = new Date().toISOString();
       removeLocalDraft(onboardingStorageKey(loaded.userId, "issueDraft"));
       await maybeUpsertOnboardingPrefs(loaded.userId, { onboarding_completed_at: completedAt, issue_draft: null, last_ui_state: "COMPLETE" });
       setLoaded({ ...loaded, events: [event, ...loaded.events], prefs: { ...loaded.prefs, onboardingCompletedAt: completedAt }, state: "COMPLETE" });
+      onStateChange?.("COMPLETE");
       setMessage("Issue saved");
       void trackAnalyticsWithUser(supabase, "onboarding_first_issue_saved", {
         project_id: project.id,
@@ -609,7 +715,7 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
     );
   }
 
-  if (!loaded || loaded.state === "COMPLETE") return null;
+  if (!loaded || (!forceStart && loaded.state === "COMPLETE")) return null;
 
   if (mode === "welcome" && loaded.state === "WELCOME") {
     return (
@@ -626,26 +732,24 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
             </p>
             <div style={{ marginTop: 18 }}>
               <OnboardingCallout tone="green">
-                You only need a project name, trade/package, contract basis and one sentence about what happened.
+                You only need a project name, trade/package, contract basis, a short CE title and the first factual note about what happened.
               </OnboardingCallout>
             </div>
             <div style={{ marginTop: 26, display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <button className="app-primary-action" onClick={() => setMode("project")} style={{ minWidth: 210 }}>
+              <button type="button" onClick={() => setMode("project")} style={{ ...darkButtonStyle, minWidth: 220 }}>
                 Create your first project
               </button>
-              <button className="app-control" onClick={() => {
-                setMessage("Sample projects stay separate from live reporting. Use the admin demo seed when you want a full demo workspace.");
-                void trackAnalyticsWithUser(supabaseBrowser(), "demo_workspace_opened", { entry_source: "welcome_empty_dashboard" });
-              }}>
-                Explore a sample project
+              <button type="button" onClick={testDemoDashboard} style={{ ...purpleButtonStyle, minWidth: 190 }}>
+                Test demo dashboard
               </button>
-              <button className="app-control" onClick={dismissWelcome}>Go to workspace</button>
+              <button type="button" onClick={dismissWelcome} style={{ ...quietButtonStyle, minWidth: 160 }}>Go to workspace</button>
             </div>
-            <div style={{ marginTop: 28, display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+            <div style={{ marginTop: 28, display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
               {[
                 ["01", "Create project", "Name the job and choose the trade/package."],
-                ["02", "Record issue", "Write the first factual issue sentence."],
-                ["03", "Open dashboard", "Move into the full CE workflow."],
+                ["02", "Name the CE", "Give the first CE / VO a short factual title."],
+                ["03", "Build basis", "Write what happened in plain English."],
+                ["04", "Open dashboard", "Move into the full CE workflow."],
               ].map(([number, label, description]) => (
                 <div key={label} style={{ border: `1px solid ${appUi.border}`, borderRadius: 16, padding: 14, background: appUi.raised }}>
                   <div style={{ color: appUi.purple, fontSize: 11, fontWeight: 850 }}>{number}</div>
@@ -669,10 +773,10 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
           <div className="app-page-eyebrow" style={{ marginTop: 18 }}>First setup</div>
           <h1 style={{ ...onboardingTitleStyle(), marginTop: 6 }}>Create your first project</h1>
           <p style={onboardingCopyStyle()}>
-            Add a project name, trade/package and contract basis, then capture your first commercial issue. The full dashboard opens after that first issue is saved.
+            Add a project name, trade/package and contract basis, then name and capture your first commercial issue. The full dashboard opens after that first issue is saved.
           </p>
           <div style={{ marginTop: 20 }}>
-            <button className="app-primary-action" onClick={() => setMode("project")}>Create project</button>
+            <button type="button" onClick={() => setMode("project")} style={{ ...darkButtonStyle, minWidth: 180 }}>Create project</button>
           </div>
           <p style={{ margin: "14px 0 0", color: appUi.muted, fontSize: 13 }}>You only need three project details to begin.</p>
         </AppCard>
@@ -684,7 +788,7 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
     return (
       <ActivationShell side={<GettingStartedSide state={loaded.state} />}>
         <AppCard style={{ padding: 28 }}>
-          <div className="app-page-eyebrow">Step 1 of 2</div>
+          <div className="app-page-eyebrow">Step 1 of 3</div>
           <h1 style={{ ...onboardingTitleStyle(), marginTop: 6 }}>Create your first project</h1>
           <p style={{ ...onboardingCopyStyle(), marginBottom: 22 }}>
             This gives the first issue somewhere to live. Contract documents, rates and team members can be added later.
@@ -742,7 +846,7 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
             <OnboardingCallout tone="blue">
               Choose “Not sure” if the basis is not confirmed. Commercial Co-Pilot will keep the wording neutral until the contract position is clarified.
             </OnboardingCallout>
-            <button type="button" className="app-control" onClick={() => setOptionalOpen((open) => !open)} style={{ justifySelf: "start" }}>
+            <button type="button" onClick={() => setOptionalOpen((open) => !open)} style={{ ...quietButtonStyle, justifySelf: "start" }}>
               Add client, reference or subcontract — optional
             </button>
             {optionalOpen ? (
@@ -761,8 +865,61 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
               </div>
             ) : null}
             {error ? <div style={{ border: `1px solid ${appUi.red}`, background: appUi.redSoft, color: appUi.red, borderRadius: 14, padding: 12, fontWeight: 800 }}>{error}</div> : null}
-            <button type="button" className="app-primary-action" disabled={saving} onClick={saveProject} style={{ opacity: saving ? 0.65 : 1 }}>
+            <button type="button" disabled={saving} onClick={saveProject} style={{ ...darkButtonStyle, width: "100%", opacity: saving ? 0.65 : 1 }}>
               {saving ? "Creating project…" : "Create project and continue"}
+            </button>
+          </div>
+        </AppCard>
+      </ActivationShell>
+    );
+  }
+
+  if (mode === "title") {
+    return (
+      <ActivationShell side={<GettingStartedSide state={loaded.state} />}>
+        <AppCard style={{ padding: 28 }}>
+          {message ? <div style={{ color: appUi.green, fontWeight: 850, marginBottom: 12 }}>{message}</div> : null}
+          <div className="app-page-eyebrow">Step 2 of 3</div>
+          <h1 style={{ ...onboardingTitleStyle(), marginTop: 6 }}>Name your first CE / VO.</h1>
+          <p style={{ ...onboardingCopyStyle(), marginBottom: 18 }}>
+            This becomes the draft CE title. Keep it short, factual and easy to recognise in the register.
+          </p>
+          <label style={labelStyle()}>
+            CE / VO title
+            <input
+              ref={issueTitleRef}
+              value={issueDraft.title}
+              onChange={(e) => setIssueDraft((p) => ({
+                ...p,
+                title: e.target.value,
+                projectId: latestProject?.id ?? p.projectId,
+                projectName: latestProject?.project_name ?? p.projectName,
+              }))}
+              placeholder="e.g. Access delayed to level 03 workface due to unresolved design information"
+              style={{ ...fieldStyle(), height: 58, fontSize: 16 }}
+            />
+          </label>
+          <div style={{ marginTop: 16 }}>
+            <OnboardingCallout tone="purple">
+              Good title style: “Standing time due to delayed permit for service corridor excavation.”
+            </OnboardingCallout>
+          </div>
+          {error ? <div style={{ marginTop: 14, border: `1px solid ${appUi.red}`, background: appUi.redSoft, color: appUi.red, borderRadius: 14, padding: 12, fontWeight: 800 }}>{error}</div> : null}
+          <div style={{ marginTop: 22, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => {
+                const cleanTitle = cleanName(issueDraft.title);
+                if (!cleanTitle) return setError("Add a short CE / VO title before moving on.");
+                setError(null);
+                setMode("issue");
+              }}
+              style={{ ...darkButtonStyle, minWidth: 220 }}
+            >
+              Continue to Basis of Change
+            </button>
+            <button type="button" onClick={() => setMode("project")} style={quietButtonStyle}>
+              Back to project
             </button>
           </div>
         </AppCard>
@@ -774,46 +931,49 @@ export function OnboardingActivationDashboard({ onStateChange }: { onStateChange
     <ActivationShell side={<GettingStartedSide state={loaded.state} />}>
       <AppCard style={{ padding: 28 }}>
         {message ? <div style={{ color: appUi.green, fontWeight: 850, marginBottom: 12 }}>{message}</div> : null}
-        <div className="app-page-eyebrow">Step 2 of 2</div>
-        <h1 style={{ ...onboardingTitleStyle(), marginTop: 6 }}>What happened?</h1>
+        <div className="app-page-eyebrow">Step 3 of 3</div>
+        <h1 style={{ ...onboardingTitleStyle(), marginTop: 6 }}>Build the Basis of Change.</h1>
         <p style={{ ...onboardingCopyStyle(), marginBottom: 14 }}>
-          Describe the change, delay or instruction in your own words. The first sentence becomes the draft CE / VO title, so keep it short and factual.
+          Describe the change, delay or instruction in your own words. This will populate the first Basis of Change notes for <strong>{issueDraft.title || "your first CE / VO"}</strong>.
         </p>
         <OnboardingCallout tone="purple">
-          Example title style: “Access delayed to level 03 workface due to unresolved design information.”
+          Keep this factual: what changed, who/what caused it, where it happened and why it affected the works.
         </OnboardingCallout>
         <textarea
           ref={issueRef}
           value={issueDraft.description}
           onChange={(e) => setIssueDraft((p) => ({ ...p, description: e.target.value, projectId: latestProject?.id ?? p.projectId, projectName: latestProject?.project_name ?? p.projectName }))}
           rows={7}
-          placeholder="Type or paste what happened…"
+          placeholder="Type or paste what happened..."
           style={{ ...fieldStyle(), marginTop: 14, padding: 14, resize: "vertical", lineHeight: 1.55 }}
         />
         <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button type="button" className="app-control" onClick={() => issueRef.current?.focus()}>Paste an email</button>
-          <label className="app-control" style={{ display: "inline-flex", alignItems: "center", cursor: "pointer" }}>
+          <button type="button" onClick={() => issueRef.current?.focus()} style={quietButtonStyle}>Paste an email</button>
+          <label style={{ ...quietButtonStyle, cursor: "pointer" }}>
             Add files or photos
             <input type="file" multiple style={{ display: "none" }} onChange={() => setMessage("Files can be attached in Evidence after the issue is saved. Your issue text is safe to continue.")} />
           </label>
-          <button type="button" className="app-control" onClick={() => {
+          <button type="button" onClick={() => {
             if (issueKey) writeLocalDraft(issueKey, issueDraft);
             setMessage("Saved. Use Getting started to resume this issue.");
-          }}>Finish later</button>
+          }} style={quietButtonStyle}>Finish later</button>
         </div>
         <div style={{ marginTop: 18, border: `1px solid ${toneColours("blue").border}`, background: toneColours("blue").bg, borderRadius: 16, padding: 16 }}>
           <div style={{ color: appUi.text, fontWeight: 850 }}>Example for {selectedTrade || latestProject?.trade_package || "your package"}</div>
           <p style={{ margin: "8px 0 12px", color: appUi.muted, lineHeight: 1.55 }}>{example}</p>
-          <button type="button" className="app-control" onClick={() => setIssueDraft((p) => ({ ...p, description: example }))}>Use this as a starting point</button>
+          <button type="button" onClick={() => setIssueDraft((p) => ({ ...p, description: example }))} style={purpleButtonStyle}>Use this as a starting point</button>
         </div>
         {error ? <div style={{ marginTop: 14, border: `1px solid ${appUi.red}`, background: appUi.redSoft, color: appUi.red, borderRadius: 14, padding: 12, fontWeight: 800 }}>{error}</div> : null}
         <div style={{ marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <button type="button" className="app-primary-action" disabled={saving} onClick={saveIssue} style={{ opacity: saving ? 0.65 : 1 }}>
+          <button type="button" disabled={saving} onClick={saveIssue} style={{ ...darkButtonStyle, minWidth: 220, opacity: saving ? 0.65 : 1 }}>
             {saving ? "Saving issue…" : "Create draft CE / VO"}
           </button>
-          <QuietButton href="/app/projects">Open projects</QuietButton>
+          <button type="button" onClick={() => setMode("title")} style={quietButtonStyle}>Back to title</button>
+          <QuietButton href="/app/projects" style={quietButtonStyle}>Open projects</QuietButton>
         </div>
-        <div aria-live="polite" style={{ marginTop: 12, color: appUi.muted, fontSize: 13 }}>Saved just now</div>
+        <div aria-live="polite" style={{ marginTop: 12, color: appUi.muted, fontSize: 13 }}>
+          Your draft is kept locally until the CE / VO is created.
+        </div>
       </AppCard>
     </ActivationShell>
   );
@@ -859,10 +1019,10 @@ export function FloatingOnboardingHelper() {
 
   const isIssue = loaded.state === "FIRST_ISSUE" || loaded.state === "FIRST_ISSUE_IN_PROGRESS";
   const mainTask = isIssue
-    ? loaded.state === "FIRST_ISSUE_IN_PROGRESS" ? "Continue your first issue" : "Capture your first issue"
+    ? loaded.state === "FIRST_ISSUE_IN_PROGRESS" ? "Continue your first CE / VO" : "Name and capture your first CE / VO"
     : loaded.state === "PROJECT_SETUP_IN_PROGRESS" ? "Continue creating your project" : "Create your first project";
   const copy = isIssue
-    ? "Describe what happened in one sentence. Evidence and costs can be added later."
+    ? "Add a short title, then describe what happened. Evidence and costs can be added later."
     : loaded.state === "PROJECT_SETUP_IN_PROGRESS"
       ? "Your project details have been saved."
       : "Add a project name, trade/package and contract basis. Everything else can be added later.";
@@ -876,20 +1036,60 @@ export function FloatingOnboardingHelper() {
               <div style={{ color: appUi.text, fontWeight: 900 }}>{mainTask}</div>
               <p style={{ margin: "8px 0 0", color: appUi.muted, lineHeight: 1.5, fontSize: 13 }}>{copy}</p>
             </div>
-            <button className="app-control" onClick={() => setOpen(false)} style={{ width: 36, minHeight: 36, padding: 0 }}>×</button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              style={{
+                width: 36,
+                minHeight: 36,
+                padding: 0,
+                borderRadius: 12,
+                border: `1px solid ${appUi.border}`,
+                background: appUi.surface,
+                color: appUi.text,
+                fontWeight: 850,
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
           </div>
           <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
-            <button className="app-primary-action" onClick={() => {
+            <button
+              type="button"
+              onClick={() => {
               void trackAnalyticsWithUser(supabaseBrowser(), "onboarding_resumed", { current_onboarding_state: loaded.state });
               router.push("/app");
-            }}>
+            }}
+              style={{
+                minHeight: 44,
+                borderRadius: 14,
+                border: `1px solid ${appUi.navy}`,
+                background: appUi.navy,
+                color: appUi.navyText,
+                fontWeight: 850,
+                cursor: "pointer",
+              }}
+            >
               {isIssue ? "Resume issue" : "Start setup"}
             </button>
-            <button className="app-control" onClick={() => {
+            <button
+              type="button"
+              onClick={() => {
               void maybeUpsertOnboardingPrefs(loaded.userId, { guide_hidden_at: new Date().toISOString() });
               void trackAnalyticsWithUser(supabaseBrowser(), "onboarding_guide_hidden", { current_onboarding_state: loaded.state });
               setLoaded({ ...loaded, prefs: { ...loaded.prefs, guideHiddenAt: new Date().toISOString() } });
-            }}>
+            }}
+              style={{
+                minHeight: 42,
+                borderRadius: 14,
+                border: `1px solid ${toneColours("purple").border}`,
+                background: toneColours("purple").bg,
+                color: appUi.purple,
+                fontWeight: 850,
+                cursor: "pointer",
+              }}
+            >
               Do not show this guide again
             </button>
           </div>
