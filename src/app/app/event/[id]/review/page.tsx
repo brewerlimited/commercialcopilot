@@ -2805,6 +2805,8 @@ function ReviewPageContent() {
             <CEReadinessRail
               readiness={readiness}
               readinessLabel={readiness >= 85 ? "Ready to issue" : readiness >= 55 ? "Review advised" : "Needs work"}
+              currentStep="review"
+              showFirstCeChecklist
               rows={[
                 { label: "Recovery readiness", value: `${readiness}%` },
                 { label: "Blockers", value: String(blockers) },

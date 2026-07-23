@@ -7,6 +7,7 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 import { getOwnedEventOrThrow, getRequiredUser, isAuthErrorMessage, isOwnershipErrorMessage } from "@/lib/security";
 import CEProgress from "@/components/CEProgress";
 import CEReadinessRail from "@/components/CEReadinessRail";
+import FirstCEBridgeModal from "@/components/FirstCEBridgeModal";
 import { calculateTimeRisk, formatDateShort, getDefaultNoticePeriodDays, toDateInputValue } from "@/lib/commercialControl";
 
 type Basis = {
@@ -786,6 +787,7 @@ export default function EventBasisPage() {
 
   return (
     <div style={{ background: c.bg, minHeight: "100vh" }}>
+      <FirstCEBridgeModal eventId={eventId} eventTitle={title} />
       <div style={{ padding: "22px 24px", maxWidth: 1680, margin: "0 auto" }}>
         <div
           style={{
@@ -1133,6 +1135,8 @@ export default function EventBasisPage() {
             <CEReadinessRail
               readiness={progress}
               readinessLabel={progress >= 85 ? "Ready to move" : progress > 0 ? "In progress" : "Just started"}
+              currentStep="basis"
+              showFirstCeChecklist
               rows={[
                 { label: "Narrative", value: `${progress}%` },
                 { label: "Dates", value: eventTiming.event_date ? "Set" : "Missing" },

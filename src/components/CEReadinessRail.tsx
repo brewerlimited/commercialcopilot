@@ -22,6 +22,8 @@ export default function CEReadinessRail({
   readinessLabel,
   rows,
   coach,
+  currentStep,
+  showFirstCeChecklist = false,
   nextTitle = "What's next?",
   nextCopy,
   primaryHref,
@@ -34,6 +36,8 @@ export default function CEReadinessRail({
   readinessLabel: string;
   rows: ReadinessRow[];
   coach: string;
+  currentStep?: "details" | "basis" | "evidence" | "resources" | "prelims" | "review";
+  showFirstCeChecklist?: boolean;
   nextTitle?: string;
   nextCopy: string;
   primaryHref?: string;
@@ -43,6 +47,18 @@ export default function CEReadinessRail({
   backHref?: string;
 }) {
   const safeReadiness = Math.max(0, Math.min(100, Math.round(readiness || 0)));
+  const checklist = [
+    { key: "details", label: "Set up CE details" },
+    { key: "basis", label: "Complete Basis of Change" },
+    { key: "evidence", label: "Upload evidence" },
+    { key: "resources", label: "Add resources" },
+    { key: "prelims", label: "Add prelims + fee" },
+    { key: "review", label: "Review readiness" },
+    { key: "issue", label: "Generate submission pack" },
+    { key: "payment", label: "Track payment" },
+  ];
+  const stepOrder = ["details", "basis", "evidence", "resources", "prelims", "review", "issue", "payment"];
+  const activeIndex = Math.max(0, stepOrder.indexOf(currentStep || "details"));
 
   return (
     <>
@@ -63,6 +79,51 @@ export default function CEReadinessRail({
       <AppSideCard title="Commercial Coach" tone="purple" icon="i">
         <div style={{ color: railText.sub, fontSize: 13, lineHeight: 1.6 }}>{coach}</div>
       </AppSideCard>
+
+      {showFirstCeChecklist ? (
+        <AppSideCard title="First CE / VO checklist" tone="purple" icon="✓">
+          <div style={{ display: "grid", gap: 8 }}>
+            {checklist.map((item, itemIndex) => {
+              const complete = itemIndex < activeIndex;
+              const active = itemIndex === activeIndex;
+              const future = itemIndex > activeIndex;
+              return (
+                <div
+                  key={item.key}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    border: `1px solid ${active ? "#ddd4ff" : railText.border}`,
+                    background: active ? "var(--purple-soft, #f3efff)" : complete ? "#ecfdf5" : "var(--surface-input)",
+                    borderRadius: 13,
+                    padding: "8px 9px",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 999,
+                      display: "grid",
+                      placeItems: "center",
+                      flex: "0 0 auto",
+                      background: complete ? "#18a36f" : active ? "#6d4aff" : "transparent",
+                      border: future ? `1px solid ${railText.border}` : "1px solid transparent",
+                      color: complete || active ? "#fff" : railText.sub,
+                      fontSize: 11,
+                      fontWeight: 900,
+                    }}
+                  >
+                    {complete ? "✓" : itemIndex + 1}
+                  </span>
+                  <span style={{ color: active ? "#6d4aff" : railText.text, fontSize: 12.5, fontWeight: active ? 850 : 720, lineHeight: 1.25 }}>{item.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </AppSideCard>
+      ) : null}
 
       <AppSideCard title={nextTitle} tone="blue" icon="→">
         <div style={{ display: "grid", gap: 12 }}>

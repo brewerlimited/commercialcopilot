@@ -1331,7 +1331,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               {isAppHome && !isCeRegister ? (
                 <>
                   <div style={{ fontWeight: 800, letterSpacing: 0, color: c.black, fontSize: 18, lineHeight: 1.15 }}>
-                    Good morning, Jack
+                    Good morning
                   </div>
                   <div style={{ marginTop: 2, color: c.sub, fontSize: 12, fontWeight: 650, lineHeight: 1.25 }}>
                     Here&apos;s your commercial recovery position.

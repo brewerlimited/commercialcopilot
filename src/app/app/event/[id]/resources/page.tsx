@@ -1474,7 +1474,7 @@ export default function ResourcesPage() {
                           marginTop: 12,
                         }}
                       >
-                        No activities yet. Add an activity first, then add {labelTab(activeTab).toLowerCase()} lines inside it.
+                        No activities yet. Add the affected site activity first, then add labour, plant, material or subcontract lines against it. This keeps the cost build-up tied to what happened on site.
                       </div>
                     ) : null}
 
@@ -1693,7 +1693,7 @@ export default function ResourcesPage() {
 
                           {emptyBucket ? (
                             <div style={{ padding: 14, color: c.sub, fontWeight: 600 }}>
-                              No {labelTab(activeTab).toLowerCase()} lines added for this activity yet.
+                              No {labelTab(activeTab).toLowerCase()} lines added for this activity yet. Add the resources affected by the change; these feed the valuation support and Excel cost output.
                             </div>
                           ) : (
                             <>
@@ -2389,6 +2389,8 @@ export default function ResourcesPage() {
                 <CEReadinessRail
                   readiness={resourceReadiness}
                   readinessLabel={resourceReadiness >= 85 ? "Costs supported" : resourceReadiness >= 50 ? "Costs building" : "Needs costs"}
+                  currentStep="resources"
+                  showFirstCeChecklist
                   rows={[
                     { label: "Labour", value: money(totals.labour) },
                     { label: "Plant", value: money(totals.plant) },

@@ -201,7 +201,7 @@ function LoginPageContent() {
               cursor: "pointer",
             }}
           >
-            {mode === "signin" ? "Request access" : "Sign in"}
+            {mode === "signin" ? "Create account" : "Sign in"}
           </button>
         </div>
       </header>
@@ -340,7 +340,7 @@ function LoginPageContent() {
                 cursor: "pointer",
               }}
             >
-              Request access
+              Create account
             </button>
           </div>
 
@@ -483,7 +483,7 @@ function LoginPageContent() {
                 boxShadow: disabled ? "none" : "0 14px 28px rgba(109,74,255,0.20)",
               }}
             >
-              {loading ? "Working…" : mode === "signin" ? "Sign in" : mode === "signup" ? "Request early access" : "Send reset instructions"}
+              {loading ? "Working…" : mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset instructions"}
             </button>
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", fontSize: 13, color: c.sub }}>
@@ -495,7 +495,7 @@ function LoginPageContent() {
                       onClick={() => setMode("signup")}
                       style={{ border: "none", background: "transparent", padding: 0, color: c.purple, fontWeight: 850, cursor: "pointer" }}
                     >
-                      Request access
+                      Create account
                     </button>
                   </>
                 ) : mode === "signup" ? (

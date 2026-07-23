@@ -24,6 +24,7 @@ import {
   type OnboardingState,
 } from "@/lib/onboarding";
 import { AppCard, IconBubble, QuietButton, SmallIcon, appUi, toneColours } from "@/components/appUi";
+import FirstCEBridgeModal from "@/components/FirstCEBridgeModal";
 
 type ProjectRow = {
   id: string;
@@ -698,7 +699,7 @@ export function OnboardingActivationDashboard({
         project_id: project.id,
         event_id: event.id,
       });
-      router.push(`/app/event/${event.id}`);
+      router.push(`/app/event/${event.id}?firstCe=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save the issue. Your text has been kept.");
     } finally {
@@ -983,6 +984,7 @@ export function FloatingOnboardingHelper() {
   const router = useRouter();
   const [loaded, setLoaded] = useState<LoadedState | null>(null);
   const [open, setOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -1015,7 +1017,7 @@ export function FloatingOnboardingHelper() {
     };
   }, []);
 
-  if (!loaded || loaded.state === "COMPLETE" || loaded.prefs.guideHiddenAt) return null;
+  if (!loaded || loaded.prefs.guideHiddenAt) return null;
 
   const isIssue = loaded.state === "FIRST_ISSUE" || loaded.state === "FIRST_ISSUE_IN_PROGRESS";
   const mainTask = isIssue
@@ -1029,6 +1031,12 @@ export function FloatingOnboardingHelper() {
 
   return (
     <div style={{ position: "fixed", right: 22, bottom: 22, zIndex: 40, display: "grid", justifyItems: "end", gap: 10 }}>
+      <FirstCEBridgeModal
+        eventId={loaded.events[0]?.id}
+        eventTitle={loaded.events[0]?.title}
+        manualOpen={guideOpen}
+        onManualClose={() => setGuideOpen(false)}
+      />
       {open ? (
         <div role="dialog" aria-label="Getting started" style={{ width: 330, background: appUi.surface, border: `1px solid ${appUi.border}`, borderRadius: 18, boxShadow: appUi.shadow, padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
@@ -1097,10 +1105,11 @@ export function FloatingOnboardingHelper() {
       ) : null}
       <button
         type="button"
-        aria-label="Open getting started helper"
+        aria-label="Open workflow guide"
         onClick={() => {
-          setOpen((value) => !value);
-          void trackAnalyticsWithUser(supabaseBrowser(), "onboarding_helper_opened", { current_onboarding_state: loaded.state });
+          setOpen(false);
+          setGuideOpen(true);
+          void trackAnalyticsWithUser(supabaseBrowser(), "onboarding_helper_opened", { current_onboarding_state: loaded.state, guide: "workflow" });
         }}
         style={{
           minHeight: 46,
@@ -1118,7 +1127,7 @@ export function FloatingOnboardingHelper() {
         }}
       >
         <SmallIcon name="rocket" />
-        Getting started
+        Workflow guide
       </button>
     </div>
   );

@@ -750,7 +750,7 @@ export default function PrelimsPage() {
               background: c.soft,
             }}
           >
-            No {sectionType === "staff" ? "staff prelims" : "other prelims"} added yet.
+            No {sectionType === "staff" ? "staff prelims" : "other prelims"} added yet. Add site management, supervision, welfare, access, temporary works or other time-related support where the change affected preliminaries.
           </div>
         ) : (
           <div style={{ overflowX: "auto", width: "100%" }}>
@@ -1191,6 +1191,8 @@ export default function PrelimsPage() {
             <CEReadinessRail
               readiness={prelimReadiness}
               readinessLabel={prelimReadiness >= 85 ? "Valuation ready" : prelimReadiness >= 50 ? "Valuation building" : "Needs valuation"}
+              currentStep="prelims"
+              showFirstCeChecklist
               rows={[
                 { label: costLabel, value: money(definedCost) },
                 { label: "Prelims daily", value: money(prelimsDaily) },

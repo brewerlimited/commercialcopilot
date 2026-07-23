@@ -1141,6 +1141,7 @@ function AppHomeContent() {
   const [focusProgress, setFocusProgress] = useState<FocusProgress | null>(null);
   const [focusLoading, setFocusLoading] = useState(false);
   const [activationState, setActivationState] = useState<OnboardingState | null>(null);
+  const [showDashboardGuide, setShowDashboardGuide] = useState(false);
   const [demoModeActive, setDemoModeActive] = useState(false);
   const [forceOnboarding, setForceOnboarding] = useState(false);
 
@@ -1189,6 +1190,25 @@ function AppHomeContent() {
       } catch {}
       setForceOnboarding(false);
     }
+  }
+
+  useEffect(() => {
+    try {
+      setShowDashboardGuide(
+        window.localStorage.getItem("cc.onboarding.dashboardGuidePending") === "1" &&
+        window.localStorage.getItem("cc.onboarding.dashboardGuideDismissed") !== "1"
+      );
+    } catch {
+      setShowDashboardGuide(false);
+    }
+  }, []);
+
+  function dismissDashboardGuide() {
+    try {
+      window.localStorage.setItem("cc.onboarding.dashboardGuideDismissed", "1");
+      window.localStorage.removeItem("cc.onboarding.dashboardGuidePending");
+    } catch {}
+    setShowDashboardGuide(false);
   }
 
   useEffect(() => {
@@ -2312,6 +2332,27 @@ function AppHomeContent() {
             </div>
           </header>
 
+          {showDashboardGuide && !demoModeActive && !forceOnboarding ? (
+            <AppCard tone="purple" style={{ padding: 18 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 16, alignItems: "center" }}>
+                <div>
+                  <div style={{ color: appUi.purple, fontSize: 12, fontWeight: 900, textTransform: "uppercase", letterSpacing: ".05em" }}>Dashboard guide</div>
+                  <h2 style={{ margin: "6px 0 0", color: appUi.text, fontSize: 20, lineHeight: 1.2, fontWeight: 900 }}>This is your daily recovery control panel.</h2>
+                  <p style={{ margin: "7px 0 0", color: appUi.muted, fontSize: 13.5, lineHeight: 1.55, maxWidth: 940 }}>
+                    Use it to spot unpaid submissions, notice risk, rejected CEs, ready packs and project-level recovery health. The cards show money at risk; the priorities show what to do next.
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button type="button" onClick={() => setShowAll(true)} style={{ height: 40, borderRadius: 12, border: `1px solid ${appUi.purple}`, background: appUi.purple, color: "#fff", padding: "0 14px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Open CE register</button>
+                  <Link href="/app/priorities" style={{ textDecoration: "none" }}>
+                    <span style={{ minHeight: 40, display: "grid", placeItems: "center", borderRadius: 12, border: `1px solid ${appUi.border}`, background: appUi.surface, color: appUi.text, padding: "0 14px", fontSize: 12.5, fontWeight: 850 }}>View priorities</span>
+                  </Link>
+                  <button type="button" onClick={dismissDashboardGuide} style={{ height: 40, borderRadius: 12, border: `1px solid ${appUi.border}`, background: appUi.input, color: appUi.muted, padding: "0 12px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Got it</button>
+                </div>
+              </div>
+            </AppCard>
+          ) : null}
+
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 18, alignItems: "stretch" }}>
             <DashboardTopCard
               title="Commercial Recovery Position"
@@ -2779,6 +2820,10 @@ function AppHomeContent() {
                                 <button style={{ height: 40, border: `1px solid ${recoveryControlColours.text}`, background: recoveryControlColours.text, color: recoveryControlTone === "orange" || recoveryControlTone === "green" ? "#07111d" : "#fff", borderRadius: 12, padding: "0 16px", fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>{primaryAction.label}</button>
                               </Link>
                             )}
+                          </div>
+
+                          <div style={{ border: `1px solid ${toneColours("purple").border}`, background: toneColours("purple").bg, borderRadius: 14, padding: "11px 13px", color: c.sub, fontSize: 12.5, lineHeight: 1.45 }}>
+                            Use this once the CE / VO has been submitted or assessed. These fields do not change the submitted narrative; they track what was submitted, assessed, paid and what still needs chasing.
                           </div>
 
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, alignItems: "end" }}>

@@ -143,7 +143,7 @@ function Hero() {
               </p>
             </div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-              <Button href="/contact" tone="dark">Watch 2 Minute Demo</Button>
+              <Button href="/contact" tone="dark"><DemoButtonText /></Button>
               <Button href="/login" tone="light">Start Free Trial</Button>
             </div>
           </div>
@@ -603,7 +603,7 @@ function FinalCta() {
           </p>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
             <Button href="/login" tone="dark">Start Free Trial</Button>
-            <Button href="/contact" tone="light">Watch 2 Minute Demo</Button>
+            <Button href="/contact" tone="light"><DemoButtonText /></Button>
           </div>
         </div>
       </div>
@@ -646,6 +646,28 @@ function Button({ href, children, tone }: { href: string; children: ReactNode; t
     >
       {children}
     </Link>
+  );
+}
+
+function DemoButtonText() {
+  return (
+    <>
+      <span>Watch 2 Minute Demo</span>
+      <span
+        style={{
+          marginLeft: 10,
+          borderRadius: 999,
+          padding: "4px 7px",
+          background: "rgba(109, 74, 255, 0.12)",
+          color: "#6d4aff",
+          fontSize: 11,
+          lineHeight: 1,
+          fontWeight: 800,
+        }}
+      >
+        Coming soon
+      </span>
+    </>
   );
 }
 

@@ -111,6 +111,28 @@ function Button({ href, children, tone = "dark" }: { href: string; children: Rea
   );
 }
 
+function DemoButtonText({ compact = false }: { compact?: boolean }) {
+  return (
+    <>
+      <span>{compact ? "Watch Demo" : "Watch 2 Minute Demo"}</span>
+      <span
+        style={{
+          marginLeft: 10,
+          borderRadius: 999,
+          padding: compact ? "3px 6px" : "4px 7px",
+          background: "rgba(109, 74, 255, 0.12)",
+          color: "#6d4aff",
+          fontSize: compact ? 10 : 11,
+          lineHeight: 1,
+          fontWeight: 850,
+        }}
+      >
+        Coming soon
+      </span>
+    </>
+  );
+}
+
 function Pill({ children, tone = "blue" }: { children: ReactNode; tone?: "blue" | "green" | "orange" | "pink" }) {
   const styles = {
     blue: { bg: palette.blueBg, color: palette.blueText, border: "#cfe8ff" },
@@ -188,7 +210,9 @@ function PlanCard({ plan }: { plan: (typeof plans)[number] }) {
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", paddingTop: 6 }}>
-        <Button href={primaryHref} tone={plan.highlight ? "dark" : "light"}>{primaryCta}</Button>
+        <Button href={primaryHref} tone={plan.highlight ? "dark" : "light"}>
+          {primaryCta === "Watch Demo" ? <DemoButtonText compact /> : primaryCta}
+        </Button>
         <Button href="/contact" tone="light">Ask a Question</Button>
       </div>
     </article>
@@ -220,7 +244,7 @@ export default function PricingPage() {
                   Commercial Co-Pilot is being shaped with subcontractors during early contractor testing. The focus is simple: reduce wasted commercial time, strengthen submissions and keep recoverable money visible through to payment.
                 </p>
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  <Button href="/contact">Watch 2 Minute Demo</Button>
+                  <Button href="/contact"><DemoButtonText /></Button>
                   <Button href="/login" tone="light">Start Free Trial</Button>
                 </div>
               </div>

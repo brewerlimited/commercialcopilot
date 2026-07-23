@@ -883,7 +883,7 @@ export default function EvidencePage() {
                           fontSize: 13,
                         }}
                       >
-                        No files uploaded yet.
+                        No evidence files uploaded yet. Add the records that prove the event happened and support entitlement: instructions, photos, diaries, programme extracts and cost records.
                       </div>
                     ) : (
                       <div style={{ display: "grid", gap: 12 }}>
@@ -1161,6 +1161,8 @@ export default function EvidencePage() {
             <CEReadinessRail
               readiness={evidenceReadiness}
               readinessLabel={evidenceReadiness >= 80 ? "Evidence strong" : evidenceReadiness > 0 ? "Building support" : "Just started"}
+              currentStep="evidence"
+              showFirstCeChecklist
               rows={checklist.map((item) => ({
                 label: item.label,
                 value: item.ok ? "Uploaded" : "Missing",
